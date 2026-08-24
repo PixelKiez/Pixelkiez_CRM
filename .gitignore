@@ -36,3 +36,10 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/d1-database-id.txt
+tsconfig.tsbuildinfo
+
+# preview build artifacts (generated via esbuild)
+/preview/app.js
+/preview/app.css
+/preview/reset.css

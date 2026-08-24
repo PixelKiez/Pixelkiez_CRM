@@ -10,7 +10,9 @@
     "build": "vinext build",
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "setup": "node scripts/setup.mjs",
+    "deploy": "npm run build && node scripts/deploy.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
