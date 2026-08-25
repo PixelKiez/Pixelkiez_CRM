@@ -29,6 +29,11 @@ yarn-error.log*
 # local environment
 .env*
 
+# sqlite database files
+*.db
+*.db-wal
+*.db-shm
+
 # deployment and generated files
 .vercel
 next-env.d.ts
