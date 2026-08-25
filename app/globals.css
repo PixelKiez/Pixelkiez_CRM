@@ -225,3 +225,72 @@ h1,h2,p { margin-top:0; } h1 { margin-bottom:0; font-weight:650; font-size:clamp
   .tabs{padding:8px 14px 0}.composer,.timeline-wrap{padding:18px 20px 22px}.danger-zone{margin:4px 20px 20px}
   .primary{min-height:42px}.pipeline-grid{grid-template-columns:repeat(6,235px)}
 }
+
+/* --- Cold-Call-Leitfaden --- */
+.call-guide { padding:22px 26px 30px; display:grid; gap:18px; }
+.call-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; }
+.call-header .eyebrow { color:#68736e; font-size:11px; letter-spacing:.09em; font-weight:800; }
+.call-header h3 { margin:4px 0 2px; font-size:20px; }
+.call-header .muted { color:var(--muted); font-size:12.5px; margin:0; }
+.big-call { text-decoration:none; padding:14px 20px; font-size:15px; border-radius:10px; }
+.call-columns { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.call-columns article { border:1px solid var(--line); border-radius:12px; padding:12px 14px; background:#fbfcfb; }
+.call-columns article p { margin:6px 0 0; font-size:13.5px; }
+.call-block { border:1px solid var(--line); border-radius:12px; padding:16px 18px; background:#fbfcfb; }
+.call-block .eyebrow { color:#68736e; font-size:11px; letter-spacing:.09em; font-weight:800; }
+.call-block textarea { width:100%; margin-top:10px; border:1px solid var(--line); border-radius:8px; padding:12px; font-family:var(--font-geist-sans),system-ui,-apple-system,sans-serif; font-size:13.5px; line-height:1.6; background:#fff; resize:vertical; box-sizing:border-box; }
+.pitch-block .composer-actions { margin-top:12px; display:flex; justify-content:space-between; gap:10px; }
+.problem-list { list-style:none; padding:0; margin:10px 0 0; display:grid; gap:8px; }
+.problem-list li { padding:9px 12px; background:#fff; border-left:3px solid var(--green); border-radius:6px; font-size:13.5px; }
+
+/* --- Termine --- */
+.appointments-view { display:grid; gap:18px; }
+.appointment-list { list-style:none; padding:0; margin:0; display:grid; gap:10px; }
+.appointment-list li { display:grid; grid-template-columns:180px 1fr auto; align-items:center; gap:14px; padding:14px 18px; border:1px solid var(--line); border-radius:12px; background:#fbfcfb; }
+.appointment-list li.past { opacity:.72; }
+.appt-when strong { display:block; font-size:14px; }
+.appt-when small { color:var(--muted); font-size:11.5px; }
+.appt-body strong { display:block; font-size:14.5px; }
+.appt-body p { margin:2px 0 0; font-size:12.5px; }
+.appt-actions { display:flex; gap:8px; align-items:center; }
+.appt-actions a.ghost-btn { text-decoration:none; }
+
+/* --- Vorlagen --- */
+.templates-grid { display:grid; grid-template-columns:minmax(240px,300px) 1fr; gap:18px; align-items:start; }
+.templates-list ul { list-style:none; padding:6px 0; margin:0; }
+.templates-list li { padding:0; }
+.templates-list li button { display:flex; flex-direction:column; align-items:flex-start; gap:2px; width:100%; padding:11px 18px; background:transparent; border:0; border-left:3px solid transparent; text-align:left; cursor:pointer; }
+.templates-list li button:hover { background:#f4f6f4; }
+.templates-list li button.active { background:#eef4f0; border-left-color:var(--green); }
+.templates-list li strong { font-size:13.5px; }
+.templates-list li small { color:var(--muted); font-size:11px; }
+.templates-editor { display:flex; flex-direction:column; }
+.placeholder-help { margin:16px 24px 4px; padding:14px 16px; border:1px dashed var(--line); border-radius:10px; background:#f8faf9; }
+.placeholder-help strong { display:block; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:#68736e; margin-bottom:6px; }
+.placeholder-help code { display:inline-block; background:#eef4f0; color:#20704e; padding:2px 7px; border-radius:5px; font-size:11.5px; margin:2px 4px 2px 0; }
+.chip-row { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
+
+/* --- Agent-Key Box --- */
+.agent-key-box { display:flex; align-items:center; gap:12px; padding:14px 16px; border:1px dashed var(--green); border-radius:10px; background:#eef4f0; margin-top:14px; flex-wrap:wrap; }
+.agent-key-box .eyebrow { flex-basis:100%; color:#20704e; font-size:11px; font-weight:800; letter-spacing:.06em; }
+.agent-key-box code { flex:1; min-width:0; overflow-x:auto; padding:10px 12px; background:#fff; border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; word-break:break-all; }
+
+/* --- Existing appointments quick-view im drawer --- */
+.existing-appointments { margin-top:18px; padding-top:14px; border-top:1px solid var(--line); }
+.existing-appointments h4 { margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:#68736e; }
+.existing-appointments ul { list-style:none; padding:0; margin:0; display:grid; gap:6px; }
+.existing-appointments li { display:flex; gap:8px; align-items:center; font-size:12.5px; padding:6px 10px; background:#f8faf9; border-radius:6px; }
+.existing-appointments li strong { min-width:170px; }
+.existing-appointments li a { margin-left:auto; color:var(--green); font-weight:700; text-decoration:none; font-size:11.5px; }
+
+/* --- Checkbox label variante --- */
+.form-grid label.checkbox { display:flex; align-items:center; gap:9px; padding:8px 0; }
+.form-grid label.checkbox input { width:auto; margin:0; }
+
+.composer-actions.full { grid-column:1/-1; }
+
+@media (max-width:920px) {
+  .templates-grid { grid-template-columns:1fr; }
+  .appointment-list li { grid-template-columns:1fr; }
+  .call-columns { grid-template-columns:1fr; }
+}

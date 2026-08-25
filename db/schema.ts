@@ -14,3 +14,28 @@ export const activities = sqliteTable('activities', {
   id: integer('id').primaryKey({ autoIncrement: true }), leadId: text('lead_id').notNull(), type: text('type').notNull(),
   detail: text('detail'), createdAt: text('created_at').notNull(),
 });
+
+export const emailTemplates = sqliteTable('email_templates', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  slug: text('slug').notNull().unique(),
+  name: text('name').notNull(),
+  kind: text('kind').notNull().default('general'),
+  subject: text('subject').notNull(),
+  bodyHtml: text('body_html').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const appointments = sqliteTable('appointments', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  leadId: text('lead_id').notNull(),
+  title: text('title').notNull(),
+  startTs: text('start_ts').notNull(),
+  endTs: text('end_ts').notNull(),
+  location: text('location'),
+  notes: text('notes'),
+  gcalEventId: text('gcal_event_id'),
+  gcalLink: text('gcal_link'),
+  status: text('status').notNull().default('geplant'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});

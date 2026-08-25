@@ -1,8 +1,17 @@
 import { ensureDatabase } from '@/lib/database';
-import { loadSmtpConfig, loadStoredSettings, saveSmtpSettings } from '@/lib/settings';
+import {
+  AGENT_KEY_SETTING,
+  generateAgentKey,
+  loadSmtpConfig,
+  loadStoredSettings,
+  maskKey,
+  saveSetting,
+  saveSmtpSettings,
+} from '@/lib/settings';
 import { sendSmtpMail } from '@/lib/smtp';
+import type { SettingsView } from '@/lib/types';
 
-function masked(settings: Awaited<ReturnType<typeof loadStoredSettings>>) {
+function toView(settings: Awaited<ReturnType<typeof loadStoredSettings>>): SettingsView {
   return {
     smtp_host: settings.smtp_host ?? '',
     smtp_port: Number(settings.smtp_port ?? '') || '',
@@ -10,13 +19,18 @@ function masked(settings: Awaited<ReturnType<typeof loadStoredSettings>>) {
     smtp_from: settings.smtp_from ?? '',
     smtp_sender_name: settings.smtp_sender_name ?? '',
     smtp_pass_set: settings.smtp_pass_set,
+    agent_key_set: Boolean(settings.agent_api_key || process.env.AGENT_API_KEY),
+    agent_key_preview: maskKey(settings.agent_api_key || process.env.AGENT_API_KEY),
+    google_connected: Boolean(settings.google_oauth_tokens),
+    google_email: settings.google_email,
+    google_calendar_id: settings.google_calendar_id ?? 'primary',
   };
 }
 
 export async function GET() {
   await ensureDatabase();
   const [settings, active] = await Promise.all([loadStoredSettings(), loadSmtpConfig()]);
-  return Response.json({ settings: masked(settings), active: Boolean(active), host: active?.host ?? null, from: active?.from ?? null });
+  return Response.json({ settings: toView(settings), active: Boolean(active), host: active?.host ?? null, from: active?.from ?? null });
 }
 
 export async function PUT(request: Request) {
@@ -27,13 +41,22 @@ export async function PUT(request: Request) {
     if (typeof body[key] === 'string' && (key !== 'smtp_pass' || (body[key] as string).length > 0)) patch[key] = body[key] as string;
   }
   await saveSmtpSettings(patch);
+  if (typeof body.google_calendar_id === 'string')
+    await saveSetting('google_calendar_id', (body.google_calendar_id as string).trim() || 'primary');
   const settings = await loadStoredSettings();
-  return Response.json({ ok: true, settings: masked(settings) });
+  return Response.json({ ok: true, settings: toView(settings) });
 }
 
 export async function POST(request: Request) {
   await ensureDatabase();
-  const body = (await request.json()) as { to?: string };
+  const body = (await request.json()) as { to?: string; action?: string };
+
+  if (body.action === 'rotate_agent_key') {
+    const key = generateAgentKey();
+    await saveSetting(AGENT_KEY_SETTING, key);
+    return Response.json({ ok: true, agent_key: key });
+  }
+
   const to = body.to?.trim();
   if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return Response.json({ error: 'Gültige Test-Empfängeradresse erforderlich.' }, { status: 400 });
   const config = await loadSmtpConfig();
