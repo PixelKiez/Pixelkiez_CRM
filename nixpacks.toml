@@ -1,0 +1,13 @@
+# Pinnt Node 22 (LTS), für das better-sqlite3 13.x prebuilt binaries mitliefert,
+# und stellt python3 + Toolchain bereit, falls node-gyp doch bauen muss.
+[phases.setup]
+nixPkgs = ["nodejs_22", "python3", "gcc", "gnumake", "pkg-config"]
+
+[phases.install]
+cmds = ["npm ci --include=dev"]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "npm run start"
