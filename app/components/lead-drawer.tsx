@@ -3,8 +3,23 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import type { Activity, Appointment, EmailTemplate, Lead } from '@/lib/types';
 import { buildLeadContext, renderTemplate } from '@/lib/template-render';
+import { LOST_REASONS, MAX_CONTACT_ATTEMPTS, STATUS_OPTIONS, formatEuro, isCallBlocked, isLost, isRecontact, isWon } from '@/lib/crm-vocab';
 
-const statusOptions = ['Neu','E Mail gesendet','Recherche offen','Telefonat geplant','Erstgespräch geplant','Angebot gesendet','Gewonnen','Verloren','Ausgeschlossen'];
+const statusOptions = STATUS_OPTIONS;
+/** Datum in X Monaten als YYYY-MM-TT. */
+const monthsAhead = (months: number) => {
+  const date = new Date();
+  date.setMonth(date.getMonth() + months);
+  return date.toISOString().slice(0, 10);
+};
+/** Cent -> Eingabefeld "1499.00" und zurück. */
+const centsToInput = (cents: number | null | undefined) => typeof cents === 'number' ? (cents / 100).toFixed(2) : '';
+const inputToCents = (value: string) => {
+  const normalised = value.replace(/\s/g, '').replace(',', '.');
+  if (!normalised) return null;
+  const euro = Number(normalised);
+  return Number.isFinite(euro) && euro >= 0 ? Math.round(euro * 100) : null;
+};
 const label = (value: string | null) => value ? value.replaceAll('_', ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Nicht angegeben';
 const contactHref = (kind: string, value: string) => kind === 'phone' ? `tel:${value.replace(/\s/g, '')}` : kind === 'email' ? `mailto:${value}` : value.startsWith('http') ? value : `https://${value}`;
 const smartAction = (lead: Lead) => lead.websiteStatus === 'Nein' && lead.phone ? 'Telefonischer Erstkontakt: lokales Webseiten-Paket anbieten' : lead.websiteStatus === 'Prüfen' ? 'Website und Firmenidentität vor der Ansprache verifizieren' : lead.email ? 'Kurze personalisierte E-Mail mit konkretem Verbesserungsvorschlag senden' : 'Kontaktdaten ergänzen und Ansprechpartner recherchieren';
@@ -35,6 +50,8 @@ export default function LeadDrawer({
   onAfterAppointment?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>('overview');
+  const [docBusy, setDocBusy] = useState(false);
+  const [docMessage, setDocMessage] = useState<{ text: string; kind: 'ok' | 'err' } | null>(null);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [mailSubject, setMailSubject] = useState('');
@@ -55,6 +72,68 @@ export default function LeadDrawer({
   const [apptBusy, setApptBusy] = useState(false);
 
   const set = (key: keyof Lead, value: string | number) => setLead({ ...lead, [key]: value });
+
+  /**
+   * Dokumente werden serverseitig aus der Datenbank erzeugt, deshalb muss der
+   * Kundendatensatz vorher gespeichert sein — sonst fehlt z. B. ein gerade
+   * eingetragener Preis im Vertrag.
+   */
+  async function openDocument(kind: 'praesentation' | 'diagnose' | 'vertrag', query = '') {
+    setDocBusy(true);
+    setDocMessage(null);
+    try {
+      await onSave();
+      window.open(`/dokument/${encodeURIComponent(lead.id)}/${kind}${query}`, '_blank', 'noopener');
+    } catch {
+      setDocMessage({ text: 'Speichern fehlgeschlagen — Dokument nicht geöffnet.', kind: 'err' });
+    }
+    setDocBusy(false);
+  }
+
+  /** Sendet Vertrag oder Rechnung über das Hostinger-Postfach an den Kunden. */
+  async function sendDocument(kind: 'vertrag' | 'rechnung') {
+    if (!lead.email) return setDocMessage({ text: 'Für diesen Kunden ist keine E-Mail-Adresse hinterlegt.', kind: 'err' });
+    setDocBusy(true);
+    setDocMessage(null);
+    try {
+      await onSave();
+      const response = await fetch('/api/documents/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadId: lead.id, kind }),
+      });
+      const data = (await response.json()) as { ok?: boolean; to?: string; error?: string };
+      setDocMessage(response.ok && data.ok
+        ? { text: `${kind === 'vertrag' ? 'Vertrag' : 'Rechnung'} an ${data.to} gesendet.`, kind: 'ok' }
+        : { text: data.error || 'Versand fehlgeschlagen.', kind: 'err' });
+    } catch {
+      setDocMessage({ text: 'Der Server ist nicht erreichbar.', kind: 'err' });
+    }
+    setDocBusy(false);
+  }
+
+  async function createInvoice() {
+    setDocBusy(true);
+    setDocMessage(null);
+    try {
+      await onSave();
+      const response = await fetch('/api/invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadId: lead.id }),
+      });
+      const data = (await response.json()) as { invoice?: { id: number; number: string }; error?: string };
+      if (!response.ok || !data.invoice) {
+        setDocMessage({ text: data.error || 'Rechnung konnte nicht erstellt werden.', kind: 'err' });
+      } else {
+        setDocMessage({ text: `Rechnung ${data.invoice.number} erstellt.`, kind: 'ok' });
+        window.open(`/dokument/${encodeURIComponent(lead.id)}/rechnung?invoice=${data.invoice.id}`, '_blank', 'noopener');
+      }
+    } catch {
+      setDocMessage({ text: 'Der Server ist nicht erreichbar.', kind: 'err' });
+    }
+    setDocBusy(false);
+  }
 
   useEffect(() => {
     fetch(`/api/leads/${lead.id}`).then(async r => (await r.json()) as { activities?: Activity[] }).then(d => setActivities(d.activities ?? [])).catch(() => {});
@@ -153,15 +232,99 @@ export default function LeadDrawer({
             <strong>{smartAction(lead)}</strong>
             <p>{lead.pitch || 'Nutze die vorhandenen Kontaktdaten für eine konkrete, lokale Ansprache.'}</p>
           </section>
+
+          {isCallBlocked(lead.lostReason) && (
+            <p className="block-banner" role="note">⛔ Dieser Kunde möchte nicht angerufen werden. Bitte nur schriftlich kontaktieren.</p>
+          )}
+          {isWon(lead.status) && (
+            <p className="won-banner">✓ Gewonnen{lead.wonAt ? ` am ${new Date(lead.wonAt).toLocaleDateString('de-DE')}` : ''} · Festpreis {formatEuro(lead.priceCents)}</p>
+          )}
+
+          <section className="quick-actions">
+            <div>
+              <span className="eyebrow">KONTAKTVERSUCHE</span>
+              <strong className={(lead.contactAttempts ?? 0) >= MAX_CONTACT_ATTEMPTS ? 'warn' : ''}>
+                {lead.contactAttempts ?? 0} von {MAX_CONTACT_ATTEMPTS}
+              </strong>
+            </div>
+            <div className="quick-buttons">
+              <button
+                type="button"
+                className="ghost-btn"
+                onClick={() => {
+                  const next = (lead.contactAttempts ?? 0) + 1;
+                  // Ab dem dritten erfolglosen Versuch schlägt das System den Grund gleich mit vor.
+                  setLead(next >= MAX_CONTACT_ATTEMPTS
+                    ? { ...lead, contactAttempts: next, lostReason: 'nicht_erreicht', status: 'Verloren' }
+                    : { ...lead, contactAttempts: next });
+                }}
+              >
+                ☎ Nicht erreicht
+              </button>
+              <button
+                type="button"
+                className="ghost-btn"
+                onClick={() => setLead({ ...lead, status: 'Wiedervorlage', lostReason: 'spaeter', recontactAt: monthsAhead(6) })}
+              >
+                ⏳ In 6 Monaten erneut
+              </button>
+            </div>
+          </section>
           <div className="form-grid">
             <label>Status<select value={lead.status} onChange={e => set('status', e.target.value)}>{statusOptions.map(x => <option key={x}>{x}</option>)}</select></label>
             <label>Priorität<select value={lead.priority} onChange={e => set('priority', e.target.value)}><option>Hoch</option><option>Mittel</option><option>Niedrig</option></select></label>
             <label>Website-Status<select value={lead.websiteStatus} onChange={e => set('websiteStatus', e.target.value)}><option>Ja</option><option>Nein</option><option>Prüfen</option></select></label>
-            <label>Wiedervorlage<input type="date" value={lead.followUp || ''} onChange={e => set('followUp', e.target.value)} /></label>
+            <label>Nächster Kontakt<input type="date" value={lead.followUp || ''} onChange={e => set('followUp', e.target.value)} /></label>
+            <label>
+              Festpreis Webseite
+              <input
+                inputMode="decimal"
+                value={centsToInput(lead.priceCents)}
+                onChange={e => setLead({ ...lead, priceCents: inputToCents(e.target.value) })}
+                placeholder="z. B. 1490,00"
+              />
+            </label>
+            <label>
+              Grund / Verlauf
+              <select value={lead.lostReason || ''} onChange={e => set('lostReason', e.target.value)}>
+                <option value="">— kein Grund hinterlegt —</option>
+                {LOST_REASONS.map(reason => <option key={reason.value} value={reason.value}>{reason.label}</option>)}
+              </select>
+            </label>
+            {(isLost(lead.status) || isRecontact(lead.status) || lead.recontactAt) && (
+              <label>Wiedervorlage am<input type="date" value={lead.recontactAt || ''} onChange={e => set('recontactAt', e.target.value)} /></label>
+            )}
             <label className="full">Nächste Aktion<input value={lead.nextAction || ''} onChange={e => set('nextAction', e.target.value)} placeholder="Zum Beispiel: Dienstag anrufen" /></label>
             <label className="full">Webseite<input value={lead.website || ''} onChange={e => set('website', e.target.value)} placeholder="https://…" /></label>
             <label className="full">Notizen<textarea rows={3} value={lead.notes || ''} onChange={e => set('notes', e.target.value)} placeholder="Gesprächsverlauf, Absagen, Besonderheiten …" /></label>
           </div>
+          <section className="doc-actions">
+            <div className="doc-actions-head">
+              <span className="eyebrow">DOKUMENTE</span>
+              <small>Wird aus der hinterlegten Vorlage mit allen Kundendaten erzeugt. Änderungen werden vorher gespeichert.</small>
+            </div>
+            <div className="doc-buttons">
+              <button type="button" className="ghost-btn" disabled={docBusy} onClick={() => openDocument('praesentation')}>▶ Präsentation</button>
+              <button type="button" className="ghost-btn" disabled={docBusy} onClick={() => openDocument('diagnose')}>◇ Diagnose</button>
+              <button type="button" className="ghost-btn" disabled={docBusy} onClick={() => openDocument('vertrag')}>§ Vertrag</button>
+              <button
+                type="button"
+                className="ghost-btn"
+                disabled={docBusy || !isWon(lead.status)}
+                title={isWon(lead.status) ? 'Rechnung erzeugen' : 'Nur bei gewonnenen Kunden möglich'}
+                onClick={createInvoice}
+              >
+                € Rechnung erstellen
+              </button>
+            </div>
+            <div className="doc-buttons doc-send">
+              <button type="button" className="ghost-btn" disabled={docBusy || !lead.email} title={lead.email ? 'Vertrag per E-Mail senden' : 'Keine E-Mail-Adresse hinterlegt'} onClick={() => sendDocument('vertrag')}>✉ Vertrag senden</button>
+              <button type="button" className="ghost-btn" disabled={docBusy || !lead.email || !isWon(lead.status)} title={isWon(lead.status) ? 'Rechnung per E-Mail senden' : 'Nur bei gewonnenen Kunden möglich'} onClick={() => sendDocument('rechnung')}>✉ Rechnung senden</button>
+            </div>
+            {!isWon(lead.status) && <small className="doc-hint">Rechnungen sind erst möglich, wenn der Kunde auf „Gewonnen" steht.</small>}
+            {docMessage && <p className={`doc-msg ${docMessage.kind}`}>{docMessage.text}</p>}
+          </section>
+
           <section className="danger-zone">
             <div><h3>Lead löschen</h3><small>Entfernt den Lead samt Aktivitätsverlauf endgültig. Diese Aktion kann nicht rückgängig gemacht werden.</small></div>
             {!confirmDelete

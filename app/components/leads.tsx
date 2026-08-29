@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { STATUS_OPTIONS } from '@/lib/crm-vocab';
 import type { Lead } from '@/lib/types';
 
 const label = (value: string | null) => value ? value.replaceAll('_', ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Nicht angegeben';
@@ -66,7 +67,7 @@ export default function LeadWorkspace({
         <div><h2>{title}</h2><p>{subtitle}</p></div>
         <div className="filter-row">
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label="Status filtern">
-            <option>Alle</option>{['Neu', 'E Mail gesendet', 'Recherche offen', 'Telefonat geplant', 'Erstgespräch geplant', 'Angebot gesendet', 'Gewonnen', 'Verloren', 'Ausgeschlossen'].map(s => <option key={s}>{s}</option>)}
+            <option>Alle</option>{STATUS_OPTIONS.map(s => <option key={s}>{s}</option>)}
           </select>
           <select value={websiteFilter} onChange={e => setWebsiteFilter(e.target.value)} aria-label="Website-Status filtern"><option>Alle</option><option value="Nein">Keine Webseite</option><option value="Prüfen">Prüfen</option><option value="Ja">Bestätigt</option></select>
           <select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)} aria-label="Priorität filtern"><option>Alle</option><option>Hoch</option><option>Mittel</option><option>Niedrig</option></select>

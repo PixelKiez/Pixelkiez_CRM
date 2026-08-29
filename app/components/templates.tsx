@@ -7,6 +7,10 @@ import { extractPlaceholders } from '@/lib/template-render';
 const KINDS: Array<{ value: string; label: string }> = [
   { value: 'general', label: 'Allgemein' },
   { value: 'termin_confirm', label: 'Terminbestätigung' },
+  { value: 'praesentation', label: 'Präsentation' },
+  { value: 'diagnose', label: 'Diagnose' },
+  { value: 'vertrag', label: 'Vertrag' },
+  { value: 'rechnung', label: 'Rechnung' },
 ];
 const KIND_LABEL = (k: string) => KINDS.find(x => x.value === k)?.label || k;
 

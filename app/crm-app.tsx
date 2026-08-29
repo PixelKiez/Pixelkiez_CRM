@@ -8,11 +8,13 @@ import Pipeline from '@/app/components/pipeline';
 import SettingsPage from '@/app/components/settings';
 import TemplatesPage from '@/app/components/templates';
 import AppointmentsPage from '@/app/components/appointments';
+import Insights from '@/app/components/insights';
 import type { Activity, Appointment, EmailTemplate, Lead, LeadStats } from '@/lib/types';
 
-type View = 'dashboard'|'leads'|'pipeline'|'tasks'|'checks'|'templates'|'appointments'|'settings';
+type View = 'dashboard'|'insights'|'leads'|'pipeline'|'tasks'|'checks'|'templates'|'appointments'|'settings';
 const views: { id: View; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Übersicht', icon: '⌂' },
+  { id: 'insights', label: 'Auswertung', icon: '◔' },
   { id: 'leads', label: 'Unternehmen', icon: '◎' },
   { id: 'pipeline', label: 'Pipeline', icon: '◫' },
   { id: 'tasks', label: 'Aufgaben', icon: '✓' },
@@ -167,6 +169,7 @@ export default function CrmApp({ userEmail }: { userEmail: string | null }) {
         </header>
 
         {loading ? <Loading /> :
+          view === 'insights' ? <Insights onToast={notify} /> :
           view === 'settings' ? <SettingsPage onToast={msg => notify(msg)} /> :
           view === 'templates' ? <TemplatesPage onToast={notify} /> :
           view === 'appointments' ? <AppointmentsPage leads={leads} onOpenLead={setSelected} onToast={notify} /> :

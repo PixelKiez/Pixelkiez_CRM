@@ -1,10 +1,13 @@
 import { ensureDatabase } from '@/lib/database';
 import {
   AGENT_KEY_SETTING,
+  COMPANY_KEYS,
   generateAgentKey,
+  loadCompanyProfile,
   loadSmtpConfig,
   loadStoredSettings,
   maskKey,
+  saveCompanyProfile,
   saveSetting,
   saveSmtpSettings,
 } from '@/lib/settings';
@@ -29,8 +32,14 @@ function toView(settings: Awaited<ReturnType<typeof loadStoredSettings>>): Setti
 
 export async function GET() {
   await ensureDatabase();
-  const [settings, active] = await Promise.all([loadStoredSettings(), loadSmtpConfig()]);
-  return Response.json({ settings: toView(settings), active: Boolean(active), host: active?.host ?? null, from: active?.from ?? null });
+  const [settings, active, company] = await Promise.all([loadStoredSettings(), loadSmtpConfig(), loadCompanyProfile()]);
+  return Response.json({
+    settings: toView(settings),
+    company,
+    active: Boolean(active),
+    host: active?.host ?? null,
+    from: active?.from ?? null,
+  });
 }
 
 export async function PUT(request: Request) {
@@ -41,10 +50,18 @@ export async function PUT(request: Request) {
     if (typeof body[key] === 'string' && (key !== 'smtp_pass' || (body[key] as string).length > 0)) patch[key] = body[key] as string;
   }
   await saveSmtpSettings(patch);
+
+  // Firmenstammdaten für Vertrag und Rechnung
+  const companyPatch: Record<string, string> = {};
+  for (const key of COMPANY_KEYS) {
+    if (typeof body[key] === 'string') companyPatch[key] = (body[key] as string).trim();
+  }
+  await saveCompanyProfile(companyPatch);
+
   if (typeof body.google_calendar_id === 'string')
     await saveSetting('google_calendar_id', (body.google_calendar_id as string).trim() || 'primary');
-  const settings = await loadStoredSettings();
-  return Response.json({ ok: true, settings: toView(settings) });
+  const [settings, company] = await Promise.all([loadStoredSettings(), loadCompanyProfile()]);
+  return Response.json({ ok: true, settings: toView(settings), company });
 }
 
 export async function POST(request: Request) {

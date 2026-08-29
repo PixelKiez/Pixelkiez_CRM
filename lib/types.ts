@@ -6,6 +6,37 @@ export type Lead = {
   problems: string | null; pitch: string | null; source: string | null;
   lastContact: string | null; nextAction: string | null; followUp: string | null;
   notes: string | null; updatedAt?: string;
+  /** Festpreis für die Webseite in Cent. Wird manuell gepflegt. */
+  priceCents?: number | null;
+  /** Zeitpunkt, zu dem der Kunde auf "Gewonnen" gesetzt wurde. */
+  wonAt?: string | null;
+  /** Strukturierter Absage-/Verlaufsgrund, siehe LOST_REASONS. */
+  lostReason?: string | null;
+  /** Wiedervorlage: Kunde bleibt im System, wird zu diesem Datum erneut angegangen. */
+  recontactAt?: string | null;
+  /** Anzahl erfolgloser Kontaktversuche. */
+  contactAttempts?: number;
+};
+
+export type Invoice = {
+  id:number; leadId:string; number:string; issuedAt:string; serviceDate:string|null;
+  netCents:number; vatRate:number; vatCents:number; grossCents:number;
+  title:string|null; status:string; paidAt:string|null; notes:string|null;
+  createdAt:string; updatedAt:string;
+  leadName?:string;
+};
+
+/** Kennzahlen für das interne Dashboard. */
+export type DashboardData = {
+  buckets: { gewonnen:number; verloren:number; offen:number; wiedervorlage:number };
+  revenue: {
+    totalCents:number; wonCount:number; averageCents:number;
+    byWeek: Array<{ key:string; label:string; cents:number; count:number }>;
+    byMonth: Array<{ key:string; label:string; cents:number; count:number }>;
+  };
+  invoices: { openCents:number; paidCents:number; openCount:number; paidCount:number };
+  lostReasons: Array<{ reason:string; label:string; count:number }>;
+  dueRecontacts: number;
 };
 export type LeadStats = { total:number; withoutWebsite:number; checking:number; withWebsite:number; contacted:number; highPriority:number; withPhone:number; withEmail:number };
 export type Activity = { id:number|string; lead_id:string; type:string; detail:string|null; created_at:string; name?:string };

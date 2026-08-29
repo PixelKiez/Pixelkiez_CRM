@@ -4,6 +4,15 @@ import type { SmtpConfig } from '@/lib/smtp';
 export const SMTP_KEYS = ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_from', 'smtp_sender_name'] as const;
 export type SmtpKey = (typeof SMTP_KEYS)[number];
 
+/** Stammdaten des Anbieters — fließen in Vertrag und Rechnung ein. */
+export const COMPANY_KEYS = [
+  'company_name', 'company_street', 'company_zip', 'company_city',
+  'company_tax_number', 'company_vat_id', 'company_bank', 'company_iban', 'company_bic',
+  'company_contact', 'company_phone', 'company_email',
+  'invoice_prefix', 'invoice_next_number', 'invoice_vat_rate', 'invoice_service_label',
+] as const;
+export type CompanyKey = (typeof COMPANY_KEYS)[number];
+
 export const AGENT_KEY_SETTING = 'agent_api_key';
 export const GOOGLE_TOKEN_SETTING = 'google_oauth_tokens';
 export const GOOGLE_EMAIL_SETTING = 'google_email';
@@ -42,7 +51,29 @@ export async function loadSmtpConfig(): Promise<SmtpConfig | null> {
   return { host, port, user, pass, from, senderName: get('smtp_sender_name') || undefined };
 }
 
-const ALL_KEYS = [...SMTP_KEYS, AGENT_KEY_SETTING, GOOGLE_TOKEN_SETTING, GOOGLE_EMAIL_SETTING, GOOGLE_CALENDAR_SETTING] as const;
+const ALL_KEYS = [...SMTP_KEYS, ...COMPANY_KEYS, AGENT_KEY_SETTING, GOOGLE_TOKEN_SETTING, GOOGLE_EMAIL_SETTING, GOOGLE_CALENDAR_SETTING] as const;
+
+/** Firmenstammdaten als Objekt, fehlende Werte als leerer String. */
+export async function loadCompanyProfile(): Promise<Record<CompanyKey, string>> {
+  const db = getD1();
+  const placeholders = COMPANY_KEYS.map(() => '?').join(',');
+  const rows = await db.prepare(`SELECT key, value FROM settings WHERE key IN (${placeholders})`)
+    .bind(...COMPANY_KEYS).all<{ key: string; value: string }>();
+  const profile = Object.fromEntries(COMPANY_KEYS.map(key => [key, ''])) as Record<CompanyKey, string>;
+  for (const row of rows.results) profile[row.key as CompanyKey] = row.value ?? '';
+  return profile;
+}
+
+/** Speichert beliebige Firmenstammdaten-Felder. */
+export async function saveCompanyProfile(patch: Record<string, string>): Promise<void> {
+  const db = getD1();
+  const entries = Object.entries(patch).filter(([key]) => (COMPANY_KEYS as readonly string[]).includes(key));
+  if (!entries.length) return;
+  await db.batch(entries.map(([key, value]) =>
+    db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+      .bind(key, String(value ?? '')),
+  ));
+}
 
 export async function loadStoredSettings(): Promise<StoredSettings> {
   const db = getD1();

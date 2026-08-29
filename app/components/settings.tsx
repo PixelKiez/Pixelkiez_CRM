@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
+import CompanySettings from '@/app/components/company-settings';
 import type { SettingsView } from '@/lib/types';
 
 const blank: SettingsView = {
@@ -75,6 +76,8 @@ export default function SettingsPage({ onToast }: { onToast: (msg: string) => vo
 
   return (
     <form className="settings-grid" onSubmit={save}>
+      <CompanySettings onToast={onToast} />
+
       <article className="panel settings-panel">
         <div className="panel-head">
           <div><span className="eyebrow">E-MAIL-KONFIGURATION</span><h2>Dein Hostinger-Postfach</h2></div>
