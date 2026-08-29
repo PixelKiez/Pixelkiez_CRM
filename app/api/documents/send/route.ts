@@ -1,7 +1,7 @@
 import { ensureDatabase, getD1, rowToInvoice, rowToLead, rowToTemplate } from '@/lib/database';
 import { loadCompanyProfile, loadSmtpConfig } from '@/lib/settings';
 import { buildDocumentContext, buildInvoiceExtras } from '@/lib/document-context';
-import { renderTemplate } from '@/lib/template-render';
+import { renderTemplate, type TemplateContext } from '@/lib/template-render';
 import { sendSmtpMail } from '@/lib/smtp';
 
 const SENDABLE: Record<string, string> = { vertrag: 'Vertrag', rechnung: 'Rechnung', diagnose: 'Diagnose' };
@@ -45,7 +45,7 @@ export async function POST(request: Request) {
   const template = rowToTemplate(templateRow);
 
   const company = await loadCompanyProfile();
-  let extras = {};
+  let extras: TemplateContext = {};
   if (kind === 'rechnung') {
     const invoiceRow = body.invoiceId
       ? await db.prepare('SELECT * FROM invoices WHERE id=? AND lead_id=?').bind(body.invoiceId, leadId).first<Record<string, unknown>>()

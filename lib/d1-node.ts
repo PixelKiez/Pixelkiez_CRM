@@ -10,11 +10,27 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 const dbPath = process.env.SQLITE_PATH || resolve(process.cwd(), 'data', 'crm.db');
-mkdirSync(dirname(dbPath), { recursive: true });
 
-export const sqlite = new Database(dbPath);
-sqlite.pragma('journal_mode = WAL');
-sqlite.pragma('foreign_keys = ON');
+let connection: Database.Database | null = null;
+
+/**
+ * Öffnet die Datenbank beim ersten Zugriff, nicht beim Import.
+ *
+ * `next build` importiert jede Route in parallelen Workern, um deren Exporte
+ * einzulesen. Wurde die Verbindung auf Modulebene aufgebaut, schrieben alle
+ * Worker gleichzeitig `PRAGMA journal_mode = WAL` und der Build brach mit
+ * "database is locked" ab.
+ */
+export function getSqlite(): Database.Database {
+  if (connection) return connection;
+  mkdirSync(dirname(dbPath), { recursive: true });
+  connection = new Database(dbPath);
+  connection.pragma('journal_mode = WAL');
+  // Statt sofort zu scheitern, kurz auf einen belegten Schreib-Lock warten.
+  connection.pragma('busy_timeout = 8000');
+  connection.pragma('foreign_keys = ON');
+  return connection;
+}
 
 type Row = Record<string, unknown>;
 type RunResult = { success: boolean };
@@ -63,12 +79,12 @@ class PreparedStmt implements BoundStatement {
 }
 
 export function prepare(sql: string): PreparedStmt {
-  return new PreparedStmt(sqlite.prepare(sql));
+  return new PreparedStmt(getSqlite().prepare(sql));
 }
 
 /** Führt mehrere gebundene Statements in einer Transaktion aus (wie D1 batch). */
 export async function batch(statements: Array<{ run: () => unknown }>): Promise<void> {
-  sqlite.transaction(() => {
+  getSqlite().transaction(() => {
     for (const statement of statements) statement.run();
   })();
 }

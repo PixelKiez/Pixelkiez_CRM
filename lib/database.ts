@@ -1,4 +1,4 @@
-import { batch, prepare, sqlite } from '@/lib/d1-node';
+import { batch, getSqlite, prepare } from '@/lib/d1-node';
 import seedLeads from '@/data/leads.json';
 import type { Lead } from '@/lib/types';
 
@@ -34,11 +34,12 @@ const LEAD_COLUMNS: Array<[string, string]> = [
 ];
 
 function migrateLeadColumns() {
+  const db = getSqlite();
   const existing = new Set(
-    (sqlite.prepare('PRAGMA table_info(leads)').all() as Array<{ name: string }>).map(row => row.name),
+    (db.prepare('PRAGMA table_info(leads)').all() as Array<{ name: string }>).map(row => row.name),
   );
   for (const [name, definition] of LEAD_COLUMNS) {
-    if (!existing.has(name)) sqlite.prepare(`ALTER TABLE leads ADD COLUMN ${name} ${definition}`).run();
+    if (!existing.has(name)) db.prepare(`ALTER TABLE leads ADD COLUMN ${name} ${definition}`).run();
   }
 }
 

@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation';
 import { ensureDatabase, getD1, rowToInvoice, rowToLead, rowToTemplate } from '@/lib/database';
 import { loadCompanyProfile } from '@/lib/settings';
 import { buildDocumentContext, buildInvoiceExtras, splitSlides } from '@/lib/document-context';
-import { renderTemplate } from '@/lib/template-render';
+import { renderTemplate, type TemplateContext } from '@/lib/template-render';
 import Slides from './slides';
 import DocumentToolbar from './toolbar';
 
@@ -51,7 +51,7 @@ export default async function DocumentPage({
   const template = rowToTemplate(templateRow);
   const company = await loadCompanyProfile();
 
-  let extras = {};
+  let extras: TemplateContext = {};
   if (kind === 'rechnung') {
     const invoiceRow = invoiceId
       ? await db.prepare('SELECT * FROM invoices WHERE id=? AND lead_id=?').bind(invoiceId, leadId).first<Record<string, unknown>>()
