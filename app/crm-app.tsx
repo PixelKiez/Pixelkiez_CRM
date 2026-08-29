@@ -23,7 +23,7 @@ const views: { id: View; label: string; icon: string }[] = [
 ];
 const blankStats: LeadStats = { total: 0, withoutWebsite: 0, checking: 0, withWebsite: 0, contacted: 0, highPriority: 0, withPhone: 0, withEmail: 0 };
 
-export default function CrmApp() {
+export default function CrmApp({ userEmail }: { userEmail: string | null }) {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [stats, setStats] = useState<LeadStats>(blankStats);
   const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
@@ -46,8 +46,12 @@ export default function CrmApp() {
 
   useEffect(() => {
     fetch('/api/leads')
-      .then(async r => (await r.json()) as { leads: Lead[]; stats: LeadStats; statusCounts?: Record<string, number>; activities?: Activity[] })
-      .then(data => { setLeads(data.leads); setStats(data.stats); setStatusCounts(data.statusCounts ?? {}); setActivities(data.activities ?? []); setLoading(false); })
+      .then(async r => {
+        // Abgelaufene Session: zurück zur Anmeldung statt leerer Oberfläche.
+        if (r.status === 401) { window.location.assign('/login'); return null; }
+        return (await r.json()) as { leads: Lead[]; stats: LeadStats; statusCounts?: Record<string, number>; activities?: Activity[] };
+      })
+      .then(data => { if (!data) return; setLeads(data.leads); setStats(data.stats); setStatusCounts(data.statusCounts ?? {}); setActivities(data.activities ?? []); setLoading(false); })
       .catch(() => { notify('Die Daten konnten nicht geladen werden.', 'err'); setLoading(false); });
     fetch('/api/templates').then(async r => (await r.json()) as { templates: EmailTemplate[] }).then(d => setTemplates(d.templates)).catch(() => {});
     refreshAppointmentCount();
@@ -119,6 +123,15 @@ export default function CrmApp() {
 
   const openView = (next: View) => { setView(next); setQuery(''); setWebsiteFilter('Alle'); setPriorityFilter('Alle'); setStatusFilter('Alle'); };
 
+  async function logout() {
+    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+    window.location.assign('/login');
+  }
+
+  // Anrede aus dem lokalen Teil der E-Mail, da sich zwei Personen anmelden.
+  const greetingName = userEmail?.split('@')[0]?.replace(/[._-]+/g, ' ').trim();
+  const greeting = greetingName ? `Guten Tag, ${greetingName.charAt(0).toUpperCase()}${greetingName.slice(1)}.` : 'Guten Tag.';
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -136,11 +149,17 @@ export default function CrmApp() {
           ))}
         </nav>
         <div className="sidebar-note"><span>●</span><div><strong>{loading ? 'Daten werden geladen' : 'Daten dauerhaft gespeichert'}</strong><small>{stats.total || 952} Unternehmen im CRM</small></div></div>
+        {userEmail && (
+          <div className="sidebar-user">
+            <small title={userEmail}>{userEmail}</small>
+            <button type="button" onClick={logout}>Abmelden</button>
+          </div>
+        )}
       </aside>
 
       <section className="workspace">
         <header className="topbar">
-          <div><p className="eyebrow">REINICKENDORF · AKQUISEZENTRALE</p><h1>{view === 'dashboard' ? 'Guten Tag, Vincent.' : views.find(v => v.id === view)?.label}</h1></div>
+          <div><p className="eyebrow">REINICKENDORF · AKQUISEZENTRALE</p><h1>{view === 'dashboard' ? greeting : views.find(v => v.id === view)?.label}</h1></div>
           <div className="top-actions">
             <label className="search"><span>⌕</span><input value={query} onChange={e => setQuery(e.target.value)} aria-label="Unternehmen suchen" placeholder="Unternehmen, Telefon, PLZ suchen …" /></label>
             <button className="primary" onClick={() => setCreating(true)}>＋ Neuer Lead</button>
