@@ -64,7 +64,7 @@ export async function POST(request: Request) {
   try {
     await sendSmtpMail(config, {
       to,
-      subject: 'Testmail – Reinickendorf Akquise OS',
+      subject: 'Testmail – Pixelkiez CRM',
       html: '<h2 style="margin-top:0;">Verbindung steht ✅</h2><p>Dein CRM ist erfolgreich mit dem Postfach verbunden.</p><p style="color:#68736e;font-size:12px;">Gesendet über ' + config.host + ':' + config.port + '</p>',
     });
   } catch (error) {

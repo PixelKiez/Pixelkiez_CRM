@@ -335,3 +335,7 @@ h1,h2,p { margin-top:0; } h1 { margin-bottom:0; font-weight:650; font-size:clamp
 .sidebar-user small { color:#82938c; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .sidebar-user button { flex:none; border:1px solid #3a4a43; background:transparent; color:#bcc9c4; border-radius:7px; padding:6px 10px; font-size:11px; font-weight:700; cursor:pointer; transition:background .15s,color .15s; }
 .sidebar-user button:hover { background:#27362f; color:#fff; }
+.pw-field { position:relative; display:flex; align-items:center; }
+.pw-field input { width:100%; padding-right:88px; }
+.pw-field button { position:absolute; right:5px; border:0; background:transparent; color:var(--muted); font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; cursor:pointer; padding:7px 9px; border-radius:6px; }
+.pw-field button:hover { background:#eef2f0; color:var(--ink); }

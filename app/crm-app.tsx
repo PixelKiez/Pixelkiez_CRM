@@ -135,7 +135,7 @@ export default function CrmApp({ userEmail }: { userEmail: string | null }) {
   return (
     <main className="app-shell">
       <aside className="sidebar">
-        <button className="brand" onClick={() => openView('dashboard')}><span className="brand-mark">R</span><span>Reinickendorf<br /><small>Akquise OS</small></span></button>
+        <button className="brand" onClick={() => openView('dashboard')}><span className="brand-mark">P</span><span>Pixelkiez<br /><small>CRM</small></span></button>
         <nav aria-label="Hauptnavigation">
           {views.map(item => (
             <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => openView(item.id)}>
@@ -159,7 +159,7 @@ export default function CrmApp({ userEmail }: { userEmail: string | null }) {
 
       <section className="workspace">
         <header className="topbar">
-          <div><p className="eyebrow">REINICKENDORF · AKQUISEZENTRALE</p><h1>{view === 'dashboard' ? greeting : views.find(v => v.id === view)?.label}</h1></div>
+          <div><p className="eyebrow">PIXELKIEZ · CRM</p><h1>{view === 'dashboard' ? greeting : views.find(v => v.id === view)?.label}</h1></div>
           <div className="top-actions">
             <label className="search"><span>⌕</span><input value={query} onChange={e => setQuery(e.target.value)} aria-label="Unternehmen suchen" placeholder="Unternehmen, Telefon, PLZ suchen …" /></label>
             <button className="primary" onClick={() => setCreating(true)}>＋ Neuer Lead</button>

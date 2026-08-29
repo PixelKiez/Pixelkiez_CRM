@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import LoginForm from './login-form';
 
 export const metadata: Metadata = {
-  title: 'Anmelden · Reinickendorf Akquise OS',
+  title: 'Anmelden · Pixelkiez CRM',
   robots: { index: false, follow: false },
 };
 

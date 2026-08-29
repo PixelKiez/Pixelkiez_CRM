@@ -48,7 +48,9 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json()) as { email?: unknown; password?: unknown };
     email = typeof body.email === 'string' ? body.email : '';
-    password = typeof body.password === 'string' ? body.password : '';
+    // Randständige Leerzeichen stammen aus Passwortmanagern und Mobiltastaturen
+    // und sind nie Teil des Passworts.
+    password = typeof body.password === 'string' ? body.password.trim() : '';
   } catch {
     return NextResponse.json({ error: 'Ungültige Anfrage.' }, { status: 400 });
   }
