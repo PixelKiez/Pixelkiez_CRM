@@ -1,5 +1,6 @@
 import { ensureDatabase, getD1, rowToLead } from '@/lib/database';
 import { LEAD_COLUMNS, syncLeadPatch } from '@/lib/lead-sync';
+import { currentUserEmail } from '@/lib/current-user';
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   await ensureDatabase();
@@ -20,8 +21,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   await db.prepare(sql).bind(...changes.map(([, value]) => value), now, id).run();
 
   const detail = [`Aktualisiert: ${changes.map(([key]) => key).join(', ')}`, ...result.notes].join(' · ');
-  await db.prepare('INSERT INTO activities (lead_id,type,detail,created_at) VALUES (?,?,?,?)')
-    .bind(id, 'updated', detail, now).run();
+  await db.prepare('INSERT INTO activities (lead_id,type,detail,created_at,actor_email) VALUES (?,?,?,?,?)')
+    .bind(id, 'updated', detail, now, await currentUserEmail()).run();
 
   const row = await db.prepare('SELECT * FROM leads WHERE id=?').bind(id).first<Record<string, unknown>>();
   if (!row) return Response.json({ error: 'Lead nicht gefunden.' }, { status: 404 });

@@ -23,7 +23,7 @@ export function LeadTable({ leads, onOpen, onAskDelete }: { leads: Lead[]; onOpe
             <span className="cell-phone">{lead.phone ? <a href={telHref(lead.phone)} onClick={e => e.stopPropagation()} title={`Anrufen: ${lead.phone}`}>☎ {lead.phone}</a> : <em className="no-data">—</em>}</span>
             <span className={`web-status ${websiteTone(lead.websiteStatus)}`}>● {websiteLabel(lead.websiteStatus)}</span>
             <span className="score"><b>{lead.score}</b><i><u style={{ width: `${lead.score}%` }} /></i></span>
-            <span className="next">{lead.nextAction || smartAction(lead)}</span>
+            <span className="next">{lead.ownerEmail && <em className="owner-tag" title={`Zuständig: ${lead.ownerEmail}`}>{lead.ownerEmail.split('@')[0]}</em>}{lead.nextAction || smartAction(lead)}</span>
           </button>
           <button className="row-delete" title={`${lead.name} löschen`} aria-label={`${lead.name} löschen`} onClick={() => onAskDelete(lead)}>✕</button>
         </div>
@@ -39,9 +39,12 @@ export default function LeadWorkspace({
   title, subtitle, leads,
   websiteFilter, setWebsiteFilter, priorityFilter, setPriorityFilter, statusFilter, setStatusFilter,
   regionFilter, setRegionFilter, regionOptions,
+  ownerFilter, setOwnerFilter, userEmail,
   onOpen, onAskDelete,
 }: {
   title: string; subtitle: string; leads: Lead[];
+  ownerFilter: 'alle' | 'meine' | 'frei'; setOwnerFilter: (v: 'alle' | 'meine' | 'frei') => void;
+  userEmail: string | null;
   websiteFilter: string; setWebsiteFilter: (v: string) => void;
   priorityFilter: string; setPriorityFilter: (v: string) => void;
   statusFilter: string; setStatusFilter: (v: string) => void;
@@ -70,6 +73,11 @@ export default function LeadWorkspace({
       <div className="list-title">
         <div><h2>{title}</h2><p>{subtitle}</p></div>
         <div className="filter-row">
+          <div className="owner-switch" role="group" aria-label="Zuständigkeit filtern">
+            <button type="button" className={ownerFilter === 'alle' ? 'active' : ''} onClick={() => setOwnerFilter('alle')}>Alle</button>
+            <button type="button" className={ownerFilter === 'meine' ? 'active' : ''} disabled={!userEmail} onClick={() => setOwnerFilter('meine')}>Meine</button>
+            <button type="button" className={ownerFilter === 'frei' ? 'active' : ''} onClick={() => setOwnerFilter('frei')}>Ohne Zuständigkeit</button>
+          </div>
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label="Status filtern">
             <option>Alle</option>{STATUS_OPTIONS.map(s => <option key={s}>{s}</option>)}
           </select>

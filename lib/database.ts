@@ -18,6 +18,9 @@ const createStatements = [
   `CREATE TABLE IF NOT EXISTS invoices (id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id TEXT NOT NULL, number TEXT NOT NULL UNIQUE, issued_at TEXT NOT NULL, service_date TEXT, net_cents INTEGER NOT NULL, vat_rate INTEGER NOT NULL DEFAULT 19, vat_cents INTEGER NOT NULL, gross_cents INTEGER NOT NULL, title TEXT, status TEXT NOT NULL DEFAULT 'offen', paid_at TEXT, notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS idx_invoices_lead_id ON invoices(lead_id, issued_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_invoices_issued ON invoices(issued_at)`,
+  // Profil je angemeldetem Nutzer. Die Anmeldung selbst prüft weiterhin
+  // AUTH_USERS — hier stehen nur Anzeigename, Signatur und Kalenderzugang.
+  `CREATE TABLE IF NOT EXISTS users (email TEXT PRIMARY KEY, display_name TEXT NOT NULL, signature TEXT, phone TEXT, google_tokens TEXT, google_email TEXT, google_calendar_id TEXT NOT NULL DEFAULT 'primary', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
 ];
 
 /**
@@ -31,6 +34,11 @@ const LEAD_COLUMNS: Array<[string, string]> = [
   ['lost_reason', 'TEXT'],               // strukturierter Absagegrund
   ['recontact_at', 'TEXT'],              // Wiedervorlage (z. B. in 6 Monaten)
   ['contact_attempts', 'INTEGER NOT NULL DEFAULT 0'], // erfolglose Anrufversuche
+  ['owner_email', 'TEXT'],               // wer sich um diesen Kunden kümmert
+];
+
+const ACTIVITY_COLUMNS: Array<[string, string]> = [
+  ['actor_email', 'TEXT'],               // wer die Änderung ausgelöst hat
 ];
 
 const INVOICE_COLUMNS: Array<[string, string]> = [
@@ -224,6 +232,7 @@ export async function ensureDatabase() {
     for (const sql of createStatements) prepare(sql).run();
     migrateColumns('leads', LEAD_COLUMNS);
     migrateColumns('invoices', INVOICE_COLUMNS);
+    migrateColumns('activities', ACTIVITY_COLUMNS);
     await seedTemplatesIfEmpty();
     const count = await prepare('SELECT COUNT(*) AS count FROM leads').first<{ count: number }>();
     if (Number(count?.count || 0) > 0) return;
@@ -267,7 +276,8 @@ export function rowToLead(row: Record<string, unknown>): Lead {
     wonAt: (row.won_at as string | null) ?? null,
     lostReason: (row.lost_reason as string | null) ?? null,
     recontactAt: (row.recontact_at as string | null) ?? null,
-    contactAttempts: Number(row.contact_attempts ?? 0) };
+    contactAttempts: Number(row.contact_attempts ?? 0),
+    ownerEmail: (row.owner_email as string | null) ?? null };
 }
 
 export function rowToInvoice(row: Record<string, unknown>) {

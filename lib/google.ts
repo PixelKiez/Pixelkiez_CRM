@@ -8,6 +8,7 @@ import {
   loadStoredSettings,
   saveSetting,
 } from '@/lib/settings';
+import { clearUserTokens, loadUserTokens, saveUserTokens } from '@/lib/users';
 
 export const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/calendar.events',
@@ -40,38 +41,67 @@ export function buildAuthUrl(state: string): string {
   });
 }
 
-/** Lädt gespeicherte Tokens; erstellt einen initialisierten OAuth-Client oder wirft. */
-export async function loadOAuthClient(): Promise<{ client: OAuth2Client; email: string | null; calendarId: string }> {
+/**
+ * Lädt die Tokens des angegebenen Nutzers.
+ *
+ * Jeder verbindet seinen eigenen Google-Kalender; Termine landen dadurch bei
+ * dem, der sie anlegt. Fehlt ein persönlicher Zugang, greift der frühere
+ * gemeinsame Zugang aus den Einstellungen als Rückfallebene — sonst wären
+ * bestehende Termine nach dem Umbau nicht mehr erreichbar.
+ */
+export async function loadOAuthClient(userEmail?: string | null): Promise<{ client: OAuth2Client; email: string | null; calendarId: string }> {
   const client = createOAuthClient();
-  const stored = await loadStoredSettings();
-  if (!stored.google_oauth_tokens) throw new Error('Google ist noch nicht verbunden.');
-  const tokens = JSON.parse(stored.google_oauth_tokens);
+
+  let raw: string | null = null;
+  let googleEmail: string | null = null;
+  let calendarId = 'primary';
+  let persist: (value: string) => Promise<void>;
+
+  const personal = userEmail ? await loadUserTokens(userEmail) : null;
+  if (personal?.tokens) {
+    raw = personal.tokens;
+    googleEmail = personal.googleEmail;
+    calendarId = personal.calendarId;
+    persist = value => saveUserTokens(userEmail!, value, googleEmail);
+  } else {
+    const stored = await loadStoredSettings();
+    if (!stored.google_oauth_tokens) throw new Error('Google ist noch nicht verbunden.');
+    raw = stored.google_oauth_tokens;
+    googleEmail = stored.google_email ?? null;
+    calendarId = stored.google_calendar_id?.trim() || 'primary';
+    persist = value => saveSetting(GOOGLE_TOKEN_SETTING, value);
+  }
+
+  const tokens = JSON.parse(raw);
   client.setCredentials(tokens);
   client.on('tokens', async next => {
-    // Refresh-Response mergen und persistieren
-    const merged = { ...tokens, ...next };
-    await saveSetting(GOOGLE_TOKEN_SETTING, JSON.stringify(merged));
+    // Refresh-Response mergen und dort ablegen, wo sie hergekommen ist
+    await persist(JSON.stringify({ ...tokens, ...next }));
   });
-  return {
-    client,
-    email: stored.google_email ?? null,
-    calendarId: stored.google_calendar_id?.trim() || 'primary',
-  };
+  return { client, email: googleEmail, calendarId };
 }
 
-export async function exchangeCodeForTokens(code: string): Promise<{ email: string; tokens: unknown }> {
+export async function exchangeCodeForTokens(code: string, userEmail?: string | null): Promise<{ email: string; tokens: unknown }> {
   const client = createOAuthClient();
   const { tokens } = await client.getToken(code);
   client.setCredentials(tokens);
   const oauth = google.oauth2({ version: 'v2', auth: client });
   const info = await oauth.userinfo.get();
   const email = info.data.email ?? '';
-  await saveSetting(GOOGLE_TOKEN_SETTING, JSON.stringify(tokens));
-  if (email) await saveSetting(GOOGLE_EMAIL_SETTING, email);
+
+  if (userEmail) await saveUserTokens(userEmail, JSON.stringify(tokens), email || null);
+  else {
+    await saveSetting(GOOGLE_TOKEN_SETTING, JSON.stringify(tokens));
+    if (email) await saveSetting(GOOGLE_EMAIL_SETTING, email);
+  }
   return { email, tokens };
 }
 
-export async function disconnectGoogle(): Promise<void> {
+export async function disconnectGoogle(userEmail?: string | null): Promise<void> {
+  if (userEmail) {
+    await clearUserTokens(userEmail);
+    return;
+  }
   await deleteSetting(GOOGLE_TOKEN_SETTING);
   await deleteSetting(GOOGLE_EMAIL_SETTING);
   await deleteSetting(GOOGLE_CALENDAR_SETTING);
@@ -85,8 +115,10 @@ export async function createCalendarEvent(input: {
   endIso: string;
   attendeeEmail?: string;
   timeZone?: string;
+  /** Kalender dieses Nutzers verwenden. */
+  userEmail?: string | null;
 }): Promise<{ id: string; htmlLink: string | null }> {
-  const { client, calendarId } = await loadOAuthClient();
+  const { client, calendarId } = await loadOAuthClient(input.userEmail);
   const calendar = google.calendar({ version: 'v3', auth: client });
   const timeZone = input.timeZone || 'Europe/Berlin';
   const response = await calendar.events.insert({
@@ -105,8 +137,8 @@ export async function createCalendarEvent(input: {
   return { id: response.data.id!, htmlLink: response.data.htmlLink ?? null };
 }
 
-export async function deleteCalendarEvent(eventId: string): Promise<void> {
-  const { client, calendarId } = await loadOAuthClient();
+export async function deleteCalendarEvent(eventId: string, userEmail?: string | null): Promise<void> {
+  const { client, calendarId } = await loadOAuthClient(userEmail);
   const calendar = google.calendar({ version: 'v3', auth: client });
   await calendar.events.delete({ calendarId, eventId, sendUpdates: 'all' }).catch(() => undefined);
 }

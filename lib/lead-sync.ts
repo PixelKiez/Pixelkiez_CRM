@@ -24,6 +24,7 @@ export const LEAD_COLUMNS: Record<string, string> = {
   lastContact: 'last_contact', nextAction: 'next_action', followUp: 'follow_up', notes: 'notes',
   priceCents: 'price_cents', wonAt: 'won_at', lostReason: 'lost_reason',
   recontactAt: 'recontact_at', contactAttempts: 'contact_attempts',
+  ownerEmail: 'owner_email',
 };
 
 export type LeadPatch = Record<string, unknown>;

@@ -1,4 +1,5 @@
 import { ensureDatabase } from '@/lib/database';
+import { currentUserEmail } from '@/lib/current-user';
 import { exchangeCodeForTokens } from '@/lib/google';
 
 /** Nimmt den Auth-Code entgegen, tauscht Tokens aus, redirected zur Einstellungen-Seite. */
@@ -12,7 +13,7 @@ export async function GET(request: Request) {
   if (error) { back.searchParams.set('google', 'error'); back.searchParams.set('detail', error); return Response.redirect(back.toString(), 302); }
   if (!code) { back.searchParams.set('google', 'missing_code'); return Response.redirect(back.toString(), 302); }
   try {
-    const { email } = await exchangeCodeForTokens(code);
+    const { email } = await exchangeCodeForTokens(code, await currentUserEmail());
     back.searchParams.set('google', 'connected');
     if (email) back.searchParams.set('email', email);
   } catch (err) {

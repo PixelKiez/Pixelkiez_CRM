@@ -39,8 +39,11 @@ function addMinutes(iso: string, minutes: number): string {
 
 export default function LeadDrawer({
   lead, setLead, onClose, onSave, onSendEmail, onDelete, templates, onAfterAppointment,
+  userEmail, onClaim,
 }: {
   lead: Lead;
+  userEmail: string | null;
+  onClaim: (lead: Lead) => void | Promise<void>;
   setLead: (l: Lead) => void;
   onClose: () => void;
   onSave: () => void;
@@ -239,6 +242,22 @@ export default function LeadDrawer({
           {isWon(lead.status) && (
             <p className="won-banner">✓ Gewonnen{lead.wonAt ? ` am ${new Date(lead.wonAt).toLocaleDateString('de-DE')}` : ''} · Festpreis {formatEuro(lead.priceCents)}</p>
           )}
+
+          <section className="owner-box">
+            <div>
+              <span className="eyebrow">ZUSTÄNDIG</span>
+              {lead.ownerEmail
+                ? <strong className={lead.ownerEmail === userEmail ? 'is-me' : ''}>
+                    {lead.ownerEmail === userEmail ? 'Du' : lead.ownerEmail}
+                  </strong>
+                : <strong className="unassigned">Niemand — dieser Kunde ist frei</strong>}
+            </div>
+            {lead.ownerEmail !== userEmail && userEmail && (
+              <button type="button" className="ghost-btn" onClick={() => onClaim(lead)}>
+                {lead.ownerEmail ? '↦ Zu mir übernehmen' : '＋ Zu mir übernehmen'}
+              </button>
+            )}
+          </section>
 
           <section className="quick-actions">
             <div>

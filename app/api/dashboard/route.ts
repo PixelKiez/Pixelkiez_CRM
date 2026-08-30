@@ -1,6 +1,7 @@
 import { ensureDatabase, getD1 } from '@/lib/database';
 import { LOST_REASONS, isLost, isRecontact, isWon, isoWeekKey, monthKey, monthLabel } from '@/lib/crm-vocab';
 import { resolveRegion, sortRegions } from '@/lib/regions';
+import { currentUserEmail } from '@/lib/current-user';
 import type { DashboardData, RegionRow } from '@/lib/types';
 
 type LeadRow = { status: string; price_cents: number | null; won_at: string | null; updated_at: string; lost_reason: string | null; recontact_at: string | null; zip: string | null; city: string | null };
@@ -12,13 +13,22 @@ const weekLabel = (key: string) => {
   return `KW ${week} · ${year}`;
 };
 
-export async function GET() {
+export async function GET(request: Request) {
   await ensureDatabase();
   const db = getD1();
 
+  // scope=mine schränkt auf die eigenen Kunden ein; die Zahlen bleiben
+  // dieselben Kennzahlen, nur eben persönlich statt unternehmensweit.
+  const scope = new URL(request.url).searchParams.get('scope');
+  const me = scope === 'mine' ? await currentUserEmail() : null;
+
   const [leadRows, invoiceRows] = await Promise.all([
-    db.prepare('SELECT status, price_cents, won_at, updated_at, lost_reason, recontact_at, zip, city FROM leads').all<LeadRow>(),
-    db.prepare('SELECT status, gross_cents FROM invoices').all<InvoiceRow>(),
+    me
+      ? db.prepare('SELECT status, price_cents, won_at, updated_at, lost_reason, recontact_at, zip, city FROM leads WHERE owner_email=?').bind(me).all<LeadRow>()
+      : db.prepare('SELECT status, price_cents, won_at, updated_at, lost_reason, recontact_at, zip, city FROM leads').all<LeadRow>(),
+    me
+      ? db.prepare('SELECT i.status, i.gross_cents FROM invoices i JOIN leads l ON l.id=i.lead_id WHERE l.owner_email=?').bind(me).all<InvoiceRow>()
+      : db.prepare('SELECT status, gross_cents FROM invoices').all<InvoiceRow>(),
   ]);
   const leads = leadRows.results;
 

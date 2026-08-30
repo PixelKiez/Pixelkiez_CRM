@@ -56,13 +56,15 @@ function Bars({ rows }: { rows: Array<{ key: string; label: string; cents: numbe
   );
 }
 
-export default function Insights({ onToast }: { onToast: (msg: string, kind?: 'ok' | 'err') => void }) {
+export default function Insights({ onToast, userEmail }: { onToast: (msg: string, kind?: 'ok' | 'err') => void; userEmail: string | null }) {
   const [data, setData] = useState<DashboardData | null>(null);
   const [period, setPeriod] = useState<'month' | 'week'>('month');
   const [area, setArea] = useState<'bezirk' | 'ortsteil'>('bezirk');
+  const [scope, setScope] = useState<'firma' | 'meine'>('firma');
 
   useEffect(() => {
-    fetch('/api/dashboard')
+    setData(null);
+    fetch(scope === 'meine' ? '/api/dashboard?scope=mine' : '/api/dashboard')
       .then(async r => {
         if (r.status === 401) { window.location.assign('/login'); return null; }
         if (!r.ok) throw new Error('fehlgeschlagen');
@@ -70,7 +72,7 @@ export default function Insights({ onToast }: { onToast: (msg: string, kind?: 'o
       })
       .then(d => { if (d) setData(d); })
       .catch(() => onToast('Die Auswertung konnte nicht geladen werden.', 'err'));
-  }, [onToast]);
+  }, [onToast, scope]);
 
   const segments: Segment[] = useMemo(() => data ? [
     { key: 'gewonnen', label: 'Gewonnen', value: data.buckets.gewonnen, color: 'var(--green)' },
@@ -78,6 +80,13 @@ export default function Insights({ onToast }: { onToast: (msg: string, kind?: 'o
     { key: 'wiedervorlage', label: 'Wiedervorlage', value: data.buckets.wiedervorlage, color: 'var(--amber)' },
     { key: 'verloren', label: 'Verloren', value: data.buckets.verloren, color: 'var(--red)' },
   ] : [], [data]);
+
+  const scopeSwitch = (
+    <div className="period-switch scope-switch">
+      <button className={scope === 'firma' ? 'active' : ''} onClick={() => setScope('firma')}>Ganzes Unternehmen</button>
+      <button className={scope === 'meine' ? 'active' : ''} disabled={!userEmail} onClick={() => setScope('meine')}>Nur meine</button>
+    </div>
+  );
 
   if (!data) return <div className="loading"><i /><h2>Auswertung wird geladen</h2><p>Kennzahlen werden zusammengestellt.</p></div>;
 
@@ -99,6 +108,10 @@ export default function Insights({ onToast }: { onToast: (msg: string, kind?: 'o
 
   return (
     <div className="insights">
+      <div className="scope-bar">
+        {scopeSwitch}
+        <small>{scope === 'meine' ? 'Nur Kunden, für die du zuständig bist' : 'Alle Kunden des Unternehmens'}</small>
+      </div>
       <section className="kpi-row">
         <article className="kpi"><span className="eyebrow">GESAMTUMSATZ</span><strong>{formatEuro(data.revenue.totalCents)}</strong><small>aus {data.revenue.wonCount} gewonnenen {data.revenue.wonCount === 1 ? 'Kunden' : 'Kunden'}</small></article>
         <article className="kpi"><span className="eyebrow">DURCHSCHNITTSPREIS</span><strong>{formatEuro(data.revenue.averageCents)}</strong><small>je gewonnenem Kunden</small></article>

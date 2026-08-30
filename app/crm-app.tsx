@@ -9,10 +9,11 @@ import SettingsPage from '@/app/components/settings';
 import TemplatesPage from '@/app/components/templates';
 import AppointmentsPage from '@/app/components/appointments';
 import Insights from '@/app/components/insights';
+import ProfilePage from '@/app/components/profile';
 import { resolveRegion } from '@/lib/regions';
 import type { Activity, Appointment, EmailTemplate, Lead, LeadStats } from '@/lib/types';
 
-type View = 'dashboard'|'insights'|'leads'|'pipeline'|'tasks'|'checks'|'templates'|'appointments'|'settings';
+type View = 'dashboard'|'insights'|'profile'|'leads'|'pipeline'|'tasks'|'checks'|'templates'|'appointments'|'settings';
 const views: { id: View; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Übersicht', icon: '⌂' },
   { id: 'insights', label: 'Auswertung', icon: '◔' },
@@ -22,6 +23,7 @@ const views: { id: View; label: string; icon: string }[] = [
   { id: 'checks', label: 'Datenprüfung', icon: '◇' },
   { id: 'templates', label: 'Vorlagen', icon: '✎' },
   { id: 'appointments', label: 'Termine', icon: '☷' },
+  { id: 'profile', label: 'Mein Profil', icon: '☺' },
   { id: 'settings', label: 'Einstellungen', icon: '⚙' },
 ];
 const blankStats: LeadStats = { total: 0, withoutWebsite: 0, checking: 0, withWebsite: 0, contacted: 0, highPriority: 0, withPhone: 0, withEmail: 0 };
@@ -40,6 +42,7 @@ export default function CrmApp({ userEmail }: { userEmail: string | null }) {
   const [priorityFilter, setPriorityFilter] = useState('Alle');
   const [statusFilter, setStatusFilter] = useState('Alle');
   const [regionFilter, setRegionFilter] = useState('Alle');
+  const [ownerFilter, setOwnerFilter] = useState<'alle' | 'meine' | 'frei'>('alle');
   const [selected, setSelected] = useState<Lead | null>(null);
   const [draft, setDraft] = useState<Lead | null>(null);
   const [creating, setCreating] = useState(false);
@@ -74,8 +77,10 @@ export default function CrmApp({ userEmail }: { userEmail: string | null }) {
       && (websiteFilter === 'Alle' || lead.websiteStatus === websiteFilter)
       && (priorityFilter === 'Alle' || lead.priority === priorityFilter)
       && (statusFilter === 'Alle' || lead.status === statusFilter)
-      && (regionFilter === 'Alle' || resolveRegion(lead.zip, lead.city).ortsteil === regionFilter);
-  }), [leads, query, websiteFilter, priorityFilter, statusFilter, regionFilter]);
+      && (regionFilter === 'Alle' || resolveRegion(lead.zip, lead.city).ortsteil === regionFilter)
+      && (ownerFilter === 'alle'
+        || (ownerFilter === 'frei' ? !lead.ownerEmail : lead.ownerEmail === userEmail));
+  }), [leads, query, websiteFilter, priorityFilter, statusFilter, regionFilter, ownerFilter, userEmail]);
 
   /** Ortsteile nach Bezirk gruppiert, für die Auswahlliste. */
   const regionOptions = useMemo(() => {
@@ -144,7 +149,19 @@ export default function CrmApp({ userEmail }: { userEmail: string | null }) {
     else notify(data.error || 'Anlegen fehlgeschlagen.', 'err');
   }
 
-  const openView = (next: View) => { setView(next); setQuery(''); setWebsiteFilter('Alle'); setPriorityFilter('Alle'); setStatusFilter('Alle'); setRegionFilter('Alle'); };
+  const openView = (next: View) => { setView(next); setQuery(''); setWebsiteFilter('Alle'); setPriorityFilter('Alle'); setStatusFilter('Alle'); setRegionFilter('Alle'); setOwnerFilter('alle'); };
+
+  /** Kunden zu sich holen — jede Übernahme steht danach im Verlauf. */
+  async function claimLead(lead: Lead) {
+    if (!userEmail) return;
+    const response = await fetch(`/api/leads/${lead.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ownerEmail: userEmail }),
+    });
+    const data = (await response.json()) as { lead?: Lead; error?: string };
+    if (response.ok && data.lead) { updateLocal(data.lead); notify(`${lead.name} ist jetzt bei dir.`); }
+    else notify(data.error || 'Übernahme fehlgeschlagen.', 'err');
+  }
 
   async function logout() {
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
@@ -190,7 +207,8 @@ export default function CrmApp({ userEmail }: { userEmail: string | null }) {
         </header>
 
         {loading ? <Loading /> :
-          view === 'insights' ? <Insights onToast={notify} /> :
+          view === 'insights' ? <Insights onToast={notify} userEmail={userEmail} /> :
+          view === 'profile' ? <ProfilePage onToast={notify} /> :
           view === 'settings' ? <SettingsPage onToast={msg => notify(msg)} /> :
           view === 'templates' ? <TemplatesPage onToast={notify} /> :
           view === 'appointments' ? <AppointmentsPage leads={leads} onOpenLead={setSelected} onToast={notify} /> :
@@ -198,7 +216,7 @@ export default function CrmApp({ userEmail }: { userEmail: string | null }) {
           view === 'pipeline' ? <Pipeline leads={filtered} onOpen={setSelected} /> :
           <LeadWorkspace title={view === 'checks' ? 'Website-Angaben verifizieren' : view === 'tasks' ? 'Nächste Aktionen' : 'Alle Unternehmen'}
             subtitle={view === 'checks' ? `${visible.length} Kandidaten brauchen eine eindeutige Prüfung` : view === 'tasks' ? `${visible.length} geplante oder empfohlene Schritte` : `${visible.length} von ${stats.total} Unternehmen`}
-            leads={visible} websiteFilter={websiteFilter} setWebsiteFilter={setWebsiteFilter} priorityFilter={priorityFilter} setPriorityFilter={setPriorityFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} regionFilter={regionFilter} setRegionFilter={setRegionFilter} regionOptions={regionOptions} onOpen={setSelected} onAskDelete={setPendingDelete} />}
+            leads={visible} websiteFilter={websiteFilter} setWebsiteFilter={setWebsiteFilter} priorityFilter={priorityFilter} setPriorityFilter={setPriorityFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} regionFilter={regionFilter} setRegionFilter={setRegionFilter} regionOptions={regionOptions} ownerFilter={ownerFilter} setOwnerFilter={setOwnerFilter} userEmail={userEmail} onOpen={setSelected} onAskDelete={setPendingDelete} />}
       </section>
 
       {draft && (
@@ -211,6 +229,8 @@ export default function CrmApp({ userEmail }: { userEmail: string | null }) {
           onDelete={() => { const id = draft.id; setPendingDelete(leads.find(l => l.id === id) || draft); }}
           templates={templates}
           onAfterAppointment={refreshAppointmentCount}
+          userEmail={userEmail}
+          onClaim={claimLead}
         />
       )}
 

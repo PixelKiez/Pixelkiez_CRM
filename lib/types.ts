@@ -16,6 +16,13 @@ export type Lead = {
   recontactAt?: string | null;
   /** Anzahl erfolgloser Kontaktversuche. */
   contactAttempts?: number;
+  /** Wer sich um diesen Kunden kümmert (E-Mail des Nutzers), null = frei. */
+  ownerEmail?: string | null;
+};
+
+export type UserProfile = {
+  email:string; displayName:string; signature:string; phone:string;
+  googleEmail:string|null; googleCalendarId:string; googleConnected:boolean;
 };
 
 export type Invoice = {

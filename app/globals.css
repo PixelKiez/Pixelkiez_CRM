@@ -495,3 +495,28 @@ h1,h2,p { margin-top:0; } h1 { margin-bottom:0; font-weight:650; font-size:clamp
 .area-tag { display:inline-block; background:#e9f1ec; color:var(--green-deep); border-radius:4px; padding:1px 6px; margin-right:6px; font-size:10px; font-weight:700; font-style:normal; letter-spacing:.02em; }
 .doc-invoices { margin-top:8px; padding-top:10px; border-top:1px dashed var(--line); }
 @media (max-width:760px) { .region-table .share { display:none; } .region-table th.share { display:none; } }
+
+/* ---------- Zuständigkeit und Profil ---------- */
+.owner-switch { display:flex; gap:2px; background:#eef2f0; border-radius:8px; padding:3px; }
+.owner-switch button { border:0; background:transparent; color:var(--muted); font-size:11.5px; font-weight:700; padding:7px 11px; border-radius:6px; cursor:pointer; white-space:nowrap; }
+.owner-switch button.active { background:var(--card); color:var(--ink); box-shadow:var(--shadow-sm); }
+.owner-switch button:disabled { opacity:.4; cursor:not-allowed; }
+.owner-tag { display:inline-block; background:#eaf1ff; color:#2f5fa8; border-radius:4px; padding:1px 6px; margin-right:7px; font-size:10px; font-weight:700; font-style:normal; }
+
+.owner-box { margin:0 28px 14px; padding:13px 16px; border:1px solid var(--line); border-radius:12px; background:#f7faf8; display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; }
+.owner-box .eyebrow { margin:0 0 3px; }
+.owner-box strong { font-size:13.5px; }
+.owner-box strong.is-me { color:var(--green-deep); }
+.owner-box strong.unassigned { color:var(--muted); font-weight:600; }
+
+.scope-bar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+.scope-bar small { color:var(--muted); font-size:11.5px; }
+.scope-switch button { padding:7px 14px; }
+
+.team-list { list-style:none; margin:0; padding:0; display:grid; gap:8px; }
+.team-list li { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:11px 14px; background:#f7faf8; border-radius:9px; }
+.team-list li span { display:grid; gap:2px; }
+.team-list small { color:var(--muted); font-size:11px; }
+.team-list em { font-size:11px; font-style:normal; color:var(--muted); }
+.team-list em.ok { color:var(--green-deep); font-weight:700; }
+@media (max-width:760px) { .owner-box { margin-left:20px; margin-right:20px; } }

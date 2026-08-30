@@ -1,4 +1,5 @@
 import { ensureDatabase, getD1, rowToAppointment, rowToLead } from '@/lib/database';
+import { currentProfile } from '@/lib/current-user';
 import { createCalendarEvent } from '@/lib/google';
 import { loadSmtpConfig, loadStoredSettings } from '@/lib/settings';
 import { sendSmtpMail } from '@/lib/smtp';
@@ -52,7 +53,9 @@ export async function POST(request: Request) {
   let gcalEventId: string | null = null;
   let gcalLink: string | null = null;
   const stored = await loadStoredSettings();
-  const hasGoogle = Boolean(stored.google_oauth_tokens);
+  // Persönlicher Kalender hat Vorrang; der frühere gemeinsame Zugang bleibt Rückfallebene.
+  const me = await currentProfile();
+  const hasGoogle = Boolean(me?.googleConnected || stored.google_oauth_tokens);
   const warnings: string[] = [];
   if (hasGoogle) {
     try {
@@ -63,6 +66,7 @@ export async function POST(request: Request) {
         startIso: start.toISOString(),
         endIso: end.toISOString(),
         attendeeEmail: lead.email || undefined,
+        userEmail: me?.email,
       });
       gcalEventId = event.id;
       gcalLink = event.htmlLink;
@@ -95,11 +99,11 @@ export async function POST(request: Request) {
     if (!smtp) warnings.push('SMTP nicht konfiguriert — Bestätigungsmail wurde nicht gesendet.');
     else if (!template) warnings.push('Terminbestätigungs-Vorlage fehlt.');
     else {
-      const ctx = { ...buildLeadContext(lead, { ansprechpartner: body.ansprechpartner, absender: smtp.senderName || '' }), ...buildAppointmentContext(appointment) };
+      const ctx = { ...buildLeadContext(lead, { ansprechpartner: body.ansprechpartner, absender: me?.displayName || smtp.senderName || '' }), ...buildAppointmentContext(appointment) };
       const subject = renderTemplate(template.subject, ctx);
       const html = renderTemplate(template.bodyHtml, ctx);
       try {
-        await sendSmtpMail(smtp, { to: lead.email, subject, html });
+        await sendSmtpMail(smtp, { to: lead.email, subject, html, senderName: me?.displayName });
         await db
           .prepare('INSERT INTO activities (lead_id,type,detail,created_at) VALUES (?,?,?,?)')
           .bind(lead.id, 'email_sent', `Terminbestätigung → ${lead.email}`, new Date().toISOString())

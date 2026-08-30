@@ -1,4 +1,5 @@
 import { ensureDatabase, getD1 } from '@/lib/database';
+import { currentUserEmail } from '@/lib/current-user';
 import { deleteCalendarEvent } from '@/lib/google';
 
 export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
@@ -10,7 +11,7 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
   const eventId = row.gcal_event_id ? String(row.gcal_event_id) : null;
   const warnings: string[] = [];
   if (eventId) {
-    try { await deleteCalendarEvent(eventId); }
+    try { await deleteCalendarEvent(eventId, await currentUserEmail()); }
     catch (error) { warnings.push(`Google-Event konnte nicht gelöscht werden: ${error instanceof Error ? error.message : String(error)}`); }
   }
   await db.prepare('DELETE FROM appointments WHERE id=?').bind(Number(id)).run();

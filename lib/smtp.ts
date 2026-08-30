@@ -17,7 +17,7 @@ export type MailAttachment = { filename: string; content: string; contentType?: 
 
 export async function sendSmtpMail(
   cfg: SmtpConfig,
-  mail: { to: string; subject: string; html: string; attachments?: MailAttachment[] },
+  mail: { to: string; subject: string; html: string; attachments?: MailAttachment[]; senderName?: string },
 ): Promise<void> {
   const transporter = nodemailer.createTransport({
     host: cfg.host,
@@ -31,7 +31,11 @@ export async function sendSmtpMail(
 
   try {
     await transporter.sendMail({
-      from: cfg.senderName?.trim() ? { name: cfg.senderName.trim(), address: cfg.from } : cfg.from,
+      // Adresse bleibt immer das gemeinsame Postfach, nur der angezeigte Name
+      // ist persönlich — Antworten landen dadurch weiterhin bei allen.
+      from: (mail.senderName?.trim() || cfg.senderName?.trim())
+        ? { name: (mail.senderName?.trim() || cfg.senderName!.trim()), address: cfg.from }
+        : cfg.from,
       to: mail.to,
       subject: mail.subject,
       attachments: mail.attachments?.map(file => ({
