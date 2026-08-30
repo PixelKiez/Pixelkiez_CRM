@@ -33,13 +33,20 @@ const LEAD_COLUMNS: Array<[string, string]> = [
   ['contact_attempts', 'INTEGER NOT NULL DEFAULT 0'], // erfolglose Anrufversuche
 ];
 
-function migrateLeadColumns() {
+const INVOICE_COLUMNS: Array<[string, string]> = [
+  // 'anzahlung' (50 % bei Auftragsfreigabe), 'schluss' (Restbetrag), 'komplett'
+  ['kind', "TEXT NOT NULL DEFAULT 'komplett'"],
+  ['share_percent', 'INTEGER NOT NULL DEFAULT 100'],
+];
+
+/** Ergänzt fehlende Spalten. CREATE TABLE IF NOT EXISTS fasst bestehende Tabellen nicht an. */
+function migrateColumns(table: string, columns: Array<[string, string]>) {
   const db = getSqlite();
   const existing = new Set(
-    (db.prepare('PRAGMA table_info(leads)').all() as Array<{ name: string }>).map(row => row.name),
+    (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(row => row.name),
   );
-  for (const [name, definition] of LEAD_COLUMNS) {
-    if (!existing.has(name)) db.prepare(`ALTER TABLE leads ADD COLUMN ${name} ${definition}`).run();
+  for (const [name, definition] of columns) {
+    if (!existing.has(name)) db.prepare(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`).run();
   }
 }
 
@@ -190,10 +197,10 @@ const DOCUMENT_TEMPLATES: Array<{ slug: string; name: string; kind: string; subj
     slug: 'rechnung_standard',
     name: 'Rechnung · Standard',
     kind: 'rechnung',
-    subject: 'Rechnung {{rechnungsnummer}}',
+    subject: '{{rechnungstitel}} {{rechnungsnummer}}',
     body_html: `<p class="sender">{{anbieter_name}} · {{anbieter_strasse}} · {{anbieter_plz}} {{anbieter_ort}}</p>
 <p class="recipient">{{firma}}<br/>{{strasse}}<br/>{{plz}} {{stadt}}</p>
-<h1>Rechnung {{rechnungsnummer}}</h1>
+<h1>{{rechnungstitel}} {{rechnungsnummer}}</h1>
 <table class="meta">
   <tr><td>Rechnungsdatum</td><td>{{rechnungsdatum}}</td></tr>
   <tr><td>Leistungsdatum</td><td>{{leistungsdatum}}</td></tr>
@@ -204,6 +211,7 @@ const DOCUMENT_TEMPLATES: Array<{ slug: string; name: string; kind: string; subj
   <tr><td>Umsatzsteuer {{ust_satz}} %</td><td>{{ust_betrag}}</td></tr>
   <tr class="total"><td>Gesamtbetrag</td><td>{{brutto}}</td></tr>
 </table>
+<p>Bereits berechnet: {{bereits_berechnet}}</p>
 <p>Bitte überweisen Sie den Betrag innerhalb von 14 Tagen auf folgendes Konto:</p>
 <p>{{anbieter_bank}}<br/>IBAN {{anbieter_iban}}<br/>BIC {{anbieter_bic}}</p>
 <p class="footer">{{anbieter_name}} · Steuernummer {{anbieter_steuernummer}} · USt-IdNr. {{anbieter_ustid}}</p>`,
@@ -214,7 +222,8 @@ export async function ensureDatabase() {
   if (ready) return ready;
   ready = (async () => {
     for (const sql of createStatements) prepare(sql).run();
-    migrateLeadColumns();
+    migrateColumns('leads', LEAD_COLUMNS);
+    migrateColumns('invoices', INVOICE_COLUMNS);
     await seedTemplatesIfEmpty();
     const count = await prepare('SELECT COUNT(*) AS count FROM leads').first<{ count: number }>();
     if (Number(count?.count || 0) > 0) return;
@@ -266,6 +275,8 @@ export function rowToInvoice(row: Record<string, unknown>) {
     id: Number(row.id),
     leadId: String(row.lead_id),
     number: String(row.number),
+    kind: String(row.kind ?? 'komplett'),
+    sharePercent: Number(row.share_percent ?? 100),
     issuedAt: String(row.issued_at),
     serviceDate: (row.service_date as string | null) ?? null,
     netCents: Number(row.net_cents),

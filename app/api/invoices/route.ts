@@ -1,5 +1,5 @@
 import { ensureDatabase, getD1, rowToInvoice } from '@/lib/database';
-import { canInvoice } from '@/lib/crm-vocab';
+import { INVOICE_KIND_VALUES, canInvoice, invoiceKindTitle } from '@/lib/crm-vocab';
 import { loadCompanyProfile, saveSetting } from '@/lib/settings';
 
 /** Baut die nächste Rechnungsnummer, z. B. PK-2026-0007. */
@@ -24,7 +24,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   await ensureDatabase();
-  const body = (await request.json()) as { leadId?: string; netCents?: number; title?: string; serviceDate?: string };
+  const body = (await request.json()) as { leadId?: string; netCents?: number; title?: string; serviceDate?: string; kind?: string };
   const leadId = body.leadId?.trim();
   if (!leadId) return Response.json({ error: 'leadId fehlt.' }, { status: 400 });
 
@@ -41,9 +41,41 @@ export async function POST(request: Request) {
     );
   }
 
-  const netCents = Number.isInteger(body.netCents) ? Number(body.netCents) : lead.price_cents;
-  if (!netCents || netCents <= 0) {
+  const kind = body.kind?.trim() || 'komplett';
+  if (!INVOICE_KIND_VALUES.includes(kind)) {
+    return Response.json({ error: `Unbekannte Rechnungsart: ${kind}. Erlaubt: ${INVOICE_KIND_VALUES.join(', ')}` }, { status: 400 });
+  }
+
+  const price = lead.price_cents ?? 0;
+  if (price <= 0 && !Number.isInteger(body.netCents)) {
     return Response.json({ error: 'Kein Festpreis hinterlegt. Bitte zuerst den Preis am Kunden eintragen.' }, { status: 400 });
+  }
+
+  // Bereits berechnete Beträge (Stornos zählen nicht mit).
+  const existing = await db.prepare("SELECT kind, net_cents FROM invoices WHERE lead_id=? AND status<>'storniert'")
+    .bind(leadId).all<{ kind: string; net_cents: number }>();
+  const alreadyInvoiced = existing.results.reduce((sum, row) => sum + row.net_cents, 0);
+
+  if (kind === 'anzahlung' && existing.results.some(row => row.kind === 'anzahlung')) {
+    return Response.json({ error: 'Für diesen Kunden existiert bereits eine Anzahlungsrechnung.' }, { status: 409 });
+  }
+
+  const share = kind === 'komplett' ? 100 : 50;
+  let netCents: number;
+  if (Number.isInteger(body.netCents)) {
+    netCents = Number(body.netCents);
+  } else if (kind === 'anzahlung') {
+    netCents = Math.round(price / 2);
+  } else {
+    // Restbetrag und Gesamtbetrag rechnen gegen bereits Berechnetes.
+    netCents = price - alreadyInvoiced;
+  }
+
+  if (netCents <= 0) {
+    return Response.json(
+      { error: `Kein offener Betrag: Festpreis ${(price / 100).toFixed(2)} €, bereits berechnet ${(alreadyInvoiced / 100).toFixed(2)} €.` },
+      { status: 409 },
+    );
   }
 
   const company = await loadCompanyProfile();
@@ -58,16 +90,21 @@ export async function POST(request: Request) {
   for (let attempt = 0; attempt < 10; attempt++) {
     const number = formatNumber(prefix, counter);
     try {
+      const service = company.invoice_service_label || 'Erstellung einer Webseite';
+      // Die Position trägt die Stufe, damit sie auch in unveränderten Vorlagen sichtbar ist.
+      const title = body.title?.trim()
+        || (kind === 'komplett' ? service : `${service} — ${invoiceKindTitle(kind)} (${share} %)`);
+
       await db.prepare(
-        'INSERT INTO invoices (lead_id,number,issued_at,service_date,net_cents,vat_rate,vat_cents,gross_cents,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO invoices (lead_id,number,issued_at,service_date,net_cents,vat_rate,vat_cents,gross_cents,title,status,kind,share_percent,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
       ).bind(
         leadId, number, now, body.serviceDate || null, netCents, vatRate, vatCents, netCents + vatCents,
-        body.title?.trim() || company.invoice_service_label || 'Erstellung einer Webseite', 'offen', now, now,
+        title, 'offen', kind, share, now, now,
       ).run();
 
       await saveSetting('invoice_next_number', String(counter + 1));
       await db.prepare('INSERT INTO activities (lead_id,type,detail,created_at) VALUES (?,?,?,?)')
-        .bind(leadId, 'invoice_created', `Rechnung ${number} erstellt`, now).run();
+        .bind(leadId, 'invoice_created', `${invoiceKindTitle(kind)} ${number} über ${(netCents / 100).toFixed(2)} € netto erstellt`, now).run();
 
       const row = await db.prepare('SELECT * FROM invoices WHERE number=?').bind(number).first<Record<string, unknown>>();
       return Response.json({ invoice: rowToInvoice(row!) }, { status: 201 });

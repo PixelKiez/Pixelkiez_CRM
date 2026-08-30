@@ -112,7 +112,7 @@ export default function LeadDrawer({
     setDocBusy(false);
   }
 
-  async function createInvoice() {
+  async function createInvoice(kind: 'anzahlung' | 'schluss' | 'komplett' = 'komplett') {
     setDocBusy(true);
     setDocMessage(null);
     try {
@@ -120,7 +120,7 @@ export default function LeadDrawer({
       const response = await fetch('/api/invoices', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leadId: lead.id }),
+        body: JSON.stringify({ leadId: lead.id, kind }),
       });
       const data = (await response.json()) as { invoice?: { id: number; number: string }; error?: string };
       if (!response.ok || !data.invoice) {
@@ -307,14 +307,34 @@ export default function LeadDrawer({
               <button type="button" className="ghost-btn" disabled={docBusy} onClick={() => openDocument('praesentation')}>▶ Präsentation</button>
               <button type="button" className="ghost-btn" disabled={docBusy} onClick={() => openDocument('diagnose')}>◇ Diagnose</button>
               <button type="button" className="ghost-btn" disabled={docBusy} onClick={() => openDocument('vertrag')}>§ Vertrag</button>
+            </div>
+            <div className="doc-buttons doc-invoices">
               <button
                 type="button"
                 className="ghost-btn"
-                disabled={docBusy || !isWon(lead.status)}
-                title={isWon(lead.status) ? 'Rechnung erzeugen' : 'Nur bei gewonnenen Kunden möglich'}
-                onClick={createInvoice}
+                disabled={docBusy || !isWon(lead.status) || !lead.priceCents}
+                title={!isWon(lead.status) ? 'Nur bei gewonnenen Kunden möglich' : !lead.priceCents ? 'Erst einen Festpreis eintragen' : '50 % bei Auftragsfreigabe'}
+                onClick={() => createInvoice('anzahlung')}
               >
-                € Rechnung erstellen
+                € Anzahlung 50 %{lead.priceCents ? ` · ${formatEuro(Math.round(lead.priceCents / 2))}` : ''}
+              </button>
+              <button
+                type="button"
+                className="ghost-btn"
+                disabled={docBusy || !isWon(lead.status) || !lead.priceCents}
+                title={!isWon(lead.status) ? 'Nur bei gewonnenen Kunden möglich' : !lead.priceCents ? 'Erst einen Festpreis eintragen' : 'Restbetrag bei Auftragsabschluss'}
+                onClick={() => createInvoice('schluss')}
+              >
+                € Restbetrag
+              </button>
+              <button
+                type="button"
+                className="ghost-btn"
+                disabled={docBusy || !isWon(lead.status) || !lead.priceCents}
+                title={isWon(lead.status) ? 'Gesamtbetrag in einer Rechnung' : 'Nur bei gewonnenen Kunden möglich'}
+                onClick={() => createInvoice('komplett')}
+              >
+                € Gesamtbetrag
               </button>
             </div>
             <div className="doc-buttons doc-send">

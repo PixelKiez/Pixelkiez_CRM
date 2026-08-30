@@ -9,6 +9,7 @@ import SettingsPage from '@/app/components/settings';
 import TemplatesPage from '@/app/components/templates';
 import AppointmentsPage from '@/app/components/appointments';
 import Insights from '@/app/components/insights';
+import { resolveRegion } from '@/lib/regions';
 import type { Activity, Appointment, EmailTemplate, Lead, LeadStats } from '@/lib/types';
 
 type View = 'dashboard'|'insights'|'leads'|'pipeline'|'tasks'|'checks'|'templates'|'appointments'|'settings';
@@ -38,6 +39,7 @@ export default function CrmApp({ userEmail }: { userEmail: string | null }) {
   const [websiteFilter, setWebsiteFilter] = useState('Alle');
   const [priorityFilter, setPriorityFilter] = useState('Alle');
   const [statusFilter, setStatusFilter] = useState('Alle');
+  const [regionFilter, setRegionFilter] = useState('Alle');
   const [selected, setSelected] = useState<Lead | null>(null);
   const [draft, setDraft] = useState<Lead | null>(null);
   const [creating, setCreating] = useState(false);
@@ -71,8 +73,27 @@ export default function CrmApp({ userEmail }: { userEmail: string | null }) {
     return (!query || hay.includes(query.toLowerCase()))
       && (websiteFilter === 'Alle' || lead.websiteStatus === websiteFilter)
       && (priorityFilter === 'Alle' || lead.priority === priorityFilter)
-      && (statusFilter === 'Alle' || lead.status === statusFilter);
-  }), [leads, query, websiteFilter, priorityFilter, statusFilter]);
+      && (statusFilter === 'Alle' || lead.status === statusFilter)
+      && (regionFilter === 'Alle' || resolveRegion(lead.zip, lead.city).ortsteil === regionFilter);
+  }), [leads, query, websiteFilter, priorityFilter, statusFilter, regionFilter]);
+
+  /** Ortsteile nach Bezirk gruppiert, für die Auswahlliste. */
+  const regionOptions = useMemo(() => {
+    const map = new Map<string, Map<string, number>>();
+    for (const lead of leads) {
+      const { bezirk, ortsteil } = resolveRegion(lead.zip, lead.city);
+      const group = map.get(bezirk) ?? new Map<string, number>();
+      group.set(ortsteil, (group.get(ortsteil) ?? 0) + 1);
+      map.set(bezirk, group);
+    }
+    const rank = (b: string) => (b === 'Reinickendorf' ? 0 : b === 'Unbekannt' ? 2 : 1);
+    return [...map]
+      .sort((a, b) => rank(a[0]) - rank(b[0]) || a[0].localeCompare(b[0]))
+      .map(([bezirk, group]) => ({
+        bezirk,
+        ortsteile: [...group].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
+      }));
+  }, [leads]);
   const recommendation = useMemo(() => leads.find(l => l.websiteStatus !== 'Ja' && l.email && ['Neu', 'Recherche offen'].includes(l.status)) || leads.find(l => l.status === 'Neu') || leads[0], [leads]);
   const visible = view === 'checks' ? filtered.filter(l => l.websiteStatus === 'Prüfen') : view === 'tasks' ? filtered.filter(l => l.nextAction || l.followUp) : filtered;
   const dueCount = leads.filter(l => (l.nextAction || l.followUp)).length;
@@ -123,7 +144,7 @@ export default function CrmApp({ userEmail }: { userEmail: string | null }) {
     else notify(data.error || 'Anlegen fehlgeschlagen.', 'err');
   }
 
-  const openView = (next: View) => { setView(next); setQuery(''); setWebsiteFilter('Alle'); setPriorityFilter('Alle'); setStatusFilter('Alle'); };
+  const openView = (next: View) => { setView(next); setQuery(''); setWebsiteFilter('Alle'); setPriorityFilter('Alle'); setStatusFilter('Alle'); setRegionFilter('Alle'); };
 
   async function logout() {
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
@@ -177,7 +198,7 @@ export default function CrmApp({ userEmail }: { userEmail: string | null }) {
           view === 'pipeline' ? <Pipeline leads={filtered} onOpen={setSelected} /> :
           <LeadWorkspace title={view === 'checks' ? 'Website-Angaben verifizieren' : view === 'tasks' ? 'Nächste Aktionen' : 'Alle Unternehmen'}
             subtitle={view === 'checks' ? `${visible.length} Kandidaten brauchen eine eindeutige Prüfung` : view === 'tasks' ? `${visible.length} geplante oder empfohlene Schritte` : `${visible.length} von ${stats.total} Unternehmen`}
-            leads={visible} websiteFilter={websiteFilter} setWebsiteFilter={setWebsiteFilter} priorityFilter={priorityFilter} setPriorityFilter={setPriorityFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onOpen={setSelected} onAskDelete={setPendingDelete} />}
+            leads={visible} websiteFilter={websiteFilter} setWebsiteFilter={setWebsiteFilter} priorityFilter={priorityFilter} setPriorityFilter={setPriorityFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} regionFilter={regionFilter} setRegionFilter={setRegionFilter} regionOptions={regionOptions} onOpen={setSelected} onAskDelete={setPendingDelete} />}
       </section>
 
       {draft && (

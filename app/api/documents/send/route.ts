@@ -51,7 +51,11 @@ export async function POST(request: Request) {
       ? await db.prepare('SELECT * FROM invoices WHERE id=? AND lead_id=?').bind(body.invoiceId, leadId).first<Record<string, unknown>>()
       : await db.prepare('SELECT * FROM invoices WHERE lead_id=? ORDER BY issued_at DESC LIMIT 1').bind(leadId).first<Record<string, unknown>>();
     if (!invoiceRow) return Response.json({ error: 'Für diesen Kunden existiert noch keine Rechnung.' }, { status: 428 });
-    extras = buildInvoiceExtras(rowToInvoice(invoiceRow), company.invoice_service_label || 'Erstellung einer Webseite');
+    const invoice = rowToInvoice(invoiceRow);
+    const previous = await db.prepare(
+      "SELECT COALESCE(SUM(net_cents),0) AS total FROM invoices WHERE lead_id=? AND status<>'storniert' AND issued_at < ?",
+    ).bind(leadId, invoice.issuedAt).first<{ total: number }>();
+    extras = buildInvoiceExtras(invoice, company.invoice_service_label || 'Erstellung einer Webseite', Number(previous?.total ?? 0));
   }
 
   const context = buildDocumentContext(lead, company, extras);

@@ -1,8 +1,9 @@
 import { ensureDatabase, getD1 } from '@/lib/database';
 import { LOST_REASONS, isLost, isRecontact, isWon, isoWeekKey, monthKey, monthLabel } from '@/lib/crm-vocab';
-import type { DashboardData } from '@/lib/types';
+import { resolveRegion, sortRegions } from '@/lib/regions';
+import type { DashboardData, RegionRow } from '@/lib/types';
 
-type LeadRow = { status: string; price_cents: number | null; won_at: string | null; updated_at: string; lost_reason: string | null; recontact_at: string | null };
+type LeadRow = { status: string; price_cents: number | null; won_at: string | null; updated_at: string; lost_reason: string | null; recontact_at: string | null; zip: string | null; city: string | null };
 type InvoiceRow = { status: string; gross_cents: number };
 
 /** Woche als Anzeigetext, z. B. "KW 35 · 2026". */
@@ -16,7 +17,7 @@ export async function GET() {
   const db = getD1();
 
   const [leadRows, invoiceRows] = await Promise.all([
-    db.prepare('SELECT status, price_cents, won_at, updated_at, lost_reason, recontact_at FROM leads').all<LeadRow>(),
+    db.prepare('SELECT status, price_cents, won_at, updated_at, lost_reason, recontact_at, zip, city FROM leads').all<LeadRow>(),
     db.prepare('SELECT status, gross_cents FROM invoices').all<InvoiceRow>(),
   ]);
   const leads = leadRows.results;
@@ -31,11 +32,24 @@ export async function GET() {
   let wonCount = 0;
   let dueRecontacts = 0;
 
+  const regionMap = new Map<string, RegionRow>();
+
   for (const lead of leads) {
     if (isWon(lead.status)) buckets.gewonnen++;
     else if (isLost(lead.status)) buckets.verloren++;
     else if (isRecontact(lead.status)) buckets.wiedervorlage++;
     else buckets.offen++;
+
+    // Bezirk/Ortsteil aus PLZ, ersatzweise aus dem Städtefeld
+    const region = resolveRegion(lead.zip, lead.city);
+    const regionKey = `${region.bezirk}||${region.ortsteil}`;
+    const entry = regionMap.get(regionKey)
+      ?? { bezirk: region.bezirk, ortsteil: region.ortsteil, count: 0, gewonnen: 0, offen: 0, verloren: 0, revenueCents: 0 };
+    entry.count++;
+    if (isWon(lead.status)) { entry.gewonnen++; entry.revenueCents += lead.price_cents ?? 0; }
+    else if (isLost(lead.status)) entry.verloren++;
+    else entry.offen++;
+    regionMap.set(regionKey, entry);
 
     if (lead.lost_reason) reasonMap.set(lead.lost_reason, (reasonMap.get(lead.lost_reason) ?? 0) + 1);
     if (lead.recontact_at && lead.recontact_at <= today) dueRecontacts++;
@@ -80,6 +94,15 @@ export async function GET() {
       .filter(r => r.count > 0)
       .sort((a, b) => b.count - a.count),
     dueRecontacts,
+    regions: sortRegions([...regionMap.values()]),
+    districts: sortRegions(
+      [...regionMap.values()].reduce<Array<{ bezirk: string; count: number; gewonnen: number; revenueCents: number }>>((acc, row) => {
+        const found = acc.find(d => d.bezirk === row.bezirk);
+        if (found) { found.count += row.count; found.gewonnen += row.gewonnen; found.revenueCents += row.revenueCents; }
+        else acc.push({ bezirk: row.bezirk, count: row.count, gewonnen: row.gewonnen, revenueCents: row.revenueCents });
+        return acc;
+      }, []),
+    ),
   };
 
   return Response.json(data);

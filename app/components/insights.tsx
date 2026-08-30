@@ -59,6 +59,7 @@ function Bars({ rows }: { rows: Array<{ key: string; label: string; cents: numbe
 export default function Insights({ onToast }: { onToast: (msg: string, kind?: 'ok' | 'err') => void }) {
   const [data, setData] = useState<DashboardData | null>(null);
   const [period, setPeriod] = useState<'month' | 'week'>('month');
+  const [area, setArea] = useState<'bezirk' | 'ortsteil'>('bezirk');
 
   useEffect(() => {
     fetch('/api/dashboard')
@@ -82,6 +83,19 @@ export default function Insights({ onToast }: { onToast: (msg: string, kind?: 'o
 
   const total = segments.reduce((sum, s) => sum + s.value, 0);
   const rows = period === 'month' ? data.revenue.byMonth : data.revenue.byWeek;
+
+  // Beide Ebenen auf dieselbe Zeilenform bringen, damit die Tabelle eine Schleife bleibt.
+  const areaRows = area === 'bezirk'
+    ? data.districts.map(d => ({
+        key: d.bezirk, name: d.bezirk, bezirk: d.bezirk, count: d.count, gewonnen: d.gewonnen,
+        offen: undefined as number | undefined, revenueCents: d.revenueCents,
+        pct: total ? Math.round((d.count / total) * 100) : 0,
+      }))
+    : data.regions.map(r => ({
+        key: `${r.bezirk}-${r.ortsteil}`, name: r.ortsteil, bezirk: r.bezirk, count: r.count, gewonnen: r.gewonnen,
+        offen: r.offen as number | undefined, revenueCents: r.revenueCents,
+        pct: total ? Math.round((r.count / total) * 100) : 0,
+      }));
 
   return (
     <div className="insights">
@@ -120,6 +134,43 @@ export default function Insights({ onToast }: { onToast: (msg: string, kind?: 'o
           </header>
           <Bars rows={rows} />
         </article>
+      </section>
+
+      <section className="panel">
+        <header className="panel-head">
+          <div><span className="eyebrow">GEBIET</span><h2>Kunden nach Bezirk und Ortsteil</h2></div>
+          <div className="period-switch">
+            <button className={area === 'bezirk' ? 'active' : ''} onClick={() => setArea('bezirk')}>Bezirke</button>
+            <button className={area === 'ortsteil' ? 'active' : ''} onClick={() => setArea('ortsteil')}>Ortsteile</button>
+          </div>
+        </header>
+        <table className="region-table">
+          <thead>
+            <tr>
+              <th>{area === 'bezirk' ? 'Bezirk' : 'Ortsteil'}</th>
+              {area === 'ortsteil' && <th>Bezirk</th>}
+              <th className="num">Kunden</th>
+              <th className="num">Gewonnen</th>
+              {area === 'ortsteil' && <th className="num">Offen</th>}
+              <th className="num">Umsatz</th>
+              <th className="share">Anteil</th>
+            </tr>
+          </thead>
+          <tbody>
+            {areaRows.map(row => (
+              <tr key={row.key}>
+                <td><strong>{row.name}</strong></td>
+                {area === 'ortsteil' && <td className="muted-cell">{row.bezirk}</td>}
+                <td className="num">{row.count}</td>
+                <td className="num">{row.gewonnen || '—'}</td>
+                {area === 'ortsteil' && <td className="num">{row.offen ?? '—'}</td>}
+                <td className="num">{row.revenueCents ? formatEuro(row.revenueCents) : '—'}</td>
+                <td className="share"><span className="share-track"><i style={{ width: `${row.pct}%` }} /></span><small>{row.pct} %</small></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="muted-note">Bezirk und Ortsteil werden aus der Postleitzahl abgeleitet. Fehlt sie, wird das Städtefeld ausgewertet.</p>
       </section>
 
       {data.lostReasons.length > 0 && (

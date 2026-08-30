@@ -23,7 +23,14 @@ export type Invoice = {
   netCents:number; vatRate:number; vatCents:number; grossCents:number;
   title:string|null; status:string; paidAt:string|null; notes:string|null;
   createdAt:string; updatedAt:string;
+  /** 'anzahlung' (50 %), 'schluss' (Restbetrag) oder 'komplett'. */
+  kind:string; sharePercent:number;
   leadName?:string;
+};
+
+/** Kunden je Bezirk und Ortsteil, für Übersicht und Filterung. */
+export type RegionRow = {
+  bezirk:string; ortsteil:string; count:number; gewonnen:number; offen:number; verloren:number; revenueCents:number;
 };
 
 /** Kennzahlen für das interne Dashboard. */
@@ -37,6 +44,9 @@ export type DashboardData = {
   invoices: { openCents:number; paidCents:number; openCount:number; paidCount:number };
   lostReasons: Array<{ reason:string; label:string; count:number }>;
   dueRecontacts: number;
+  /** Aufschlüsselung nach Bezirk und Ortsteil. */
+  regions: RegionRow[];
+  districts: Array<{ bezirk:string; count:number; gewonnen:number; revenueCents:number }>;
 };
 export type LeadStats = { total:number; withoutWebsite:number; checking:number; withWebsite:number; contacted:number; highPriority:number; withPhone:number; withEmail:number };
 export type Activity = { id:number|string; lead_id:string; type:string; detail:string|null; created_at:string; name?:string };

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { STATUS_OPTIONS } from '@/lib/crm-vocab';
+import { resolveRegion } from '@/lib/regions';
 import type { Lead } from '@/lib/types';
 
 const label = (value: string | null) => value ? value.replaceAll('_', ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Nicht angegeben';
@@ -17,7 +18,7 @@ export function LeadTable({ leads, onOpen, onAskDelete }: { leads: Lead[]; onOpe
       {leads.map(lead => (
         <div className="lead-row" key={lead.id}>
           <button className="row-open" onClick={() => onOpen(lead)}>
-            <span className="company"><i>{lead.name.charAt(0)}</i><span><strong>{lead.name}</strong><small>{label(lead.category)} · {lead.id}</small></span></span>
+            <span className="company"><i>{lead.name.charAt(0)}</i><span><strong>{lead.name}</strong><small><em className="area-tag">{resolveRegion(lead.zip, lead.city).ortsteil}</em>{label(lead.category)}</small></span></span>
             <span><em className={`pill ${lead.status === 'Recherche offen' ? 'checking' : websiteTone(lead.websiteStatus) === 'no' ? 'lost' : ''}`}>{lead.status}</em></span>
             <span className="cell-phone">{lead.phone ? <a href={telHref(lead.phone)} onClick={e => e.stopPropagation()} title={`Anrufen: ${lead.phone}`}>☎ {lead.phone}</a> : <em className="no-data">—</em>}</span>
             <span className={`web-status ${websiteTone(lead.websiteStatus)}`}>● {websiteLabel(lead.websiteStatus)}</span>
@@ -37,12 +38,15 @@ const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 export default function LeadWorkspace({
   title, subtitle, leads,
   websiteFilter, setWebsiteFilter, priorityFilter, setPriorityFilter, statusFilter, setStatusFilter,
+  regionFilter, setRegionFilter, regionOptions,
   onOpen, onAskDelete,
 }: {
   title: string; subtitle: string; leads: Lead[];
   websiteFilter: string; setWebsiteFilter: (v: string) => void;
   priorityFilter: string; setPriorityFilter: (v: string) => void;
   statusFilter: string; setStatusFilter: (v: string) => void;
+  regionFilter: string; setRegionFilter: (v: string) => void;
+  regionOptions: Array<{ bezirk: string; ortsteile: Array<{ name: string; count: number }> }>;
   onOpen: (l: Lead) => void; onAskDelete: (lead: Lead) => void;
 }) {
   const [pageSize, setPageSize] = useState<number>(50);
@@ -71,6 +75,14 @@ export default function LeadWorkspace({
           </select>
           <select value={websiteFilter} onChange={e => setWebsiteFilter(e.target.value)} aria-label="Website-Status filtern"><option>Alle</option><option value="Nein">Keine Webseite</option><option value="Prüfen">Prüfen</option><option value="Ja">Bestätigt</option></select>
           <select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)} aria-label="Priorität filtern"><option>Alle</option><option>Hoch</option><option>Mittel</option><option>Niedrig</option></select>
+          <select className="area-select" value={regionFilter} onChange={e => setRegionFilter(e.target.value)} aria-label="Bezirk oder Ortsteil filtern">
+            <option value="Alle">Alle Gebiete</option>
+            {regionOptions.map(group => (
+              <optgroup key={group.bezirk} label={group.bezirk}>
+                {group.ortsteile.map(o => <option key={o.name} value={o.name}>{o.name} ({o.count})</option>)}
+              </optgroup>
+            ))}
+          </select>
         </div>
       </div>
 

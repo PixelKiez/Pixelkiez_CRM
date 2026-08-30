@@ -2,7 +2,7 @@
  * Baut den Platzhalter-Kontext für Präsentation, Diagnose, Vertrag und Rechnung.
  * Setzt auf `buildLeadContext` auf und ergänzt Preis, Anbieterdaten und Datum.
  */
-import { formatEuro } from '@/lib/crm-vocab';
+import { formatEuro, invoiceKindLabel, invoiceKindTitle } from '@/lib/crm-vocab';
 import { buildLeadContext, type TemplateContext } from '@/lib/template-render';
 import type { CompanyKey } from '@/lib/settings';
 import type { Invoice, Lead } from '@/lib/types';
@@ -45,10 +45,21 @@ export function buildDocumentContext(
   };
 }
 
-/** Ergänzt die rechnungsspezifischen Platzhalter. */
-export function buildInvoiceExtras(invoice: Invoice, serviceLabel: string): TemplateContext {
+/**
+ * Ergänzt die rechnungsspezifischen Platzhalter.
+ * `previousNetCents` sind bereits berechnete Beträge — bei einer
+ * Schlussrechnung muss die Anzahlung ausgewiesen und abgezogen werden.
+ */
+export function buildInvoiceExtras(
+  invoice: Invoice,
+  serviceLabel: string,
+  previousNetCents = 0,
+): TemplateContext {
   return {
     rechnungsnummer: invoice.number,
+    rechnungstitel: invoiceKindTitle(invoice.kind),
+    rechnungsart: invoiceKindLabel(invoice.kind),
+    anteil_prozent: String(invoice.sharePercent),
     rechnungsdatum: dateDE(invoice.issuedAt),
     leistungsdatum: invoice.serviceDate ? dateDE(invoice.serviceDate) : dateDE(invoice.issuedAt),
     leistung: invoice.title || serviceLabel,
@@ -56,6 +67,8 @@ export function buildInvoiceExtras(invoice: Invoice, serviceLabel: string): Temp
     ust_satz: String(invoice.vatRate),
     ust_betrag: formatEuro(invoice.vatCents),
     brutto: formatEuro(invoice.grossCents),
+    bereits_berechnet: previousNetCents > 0 ? formatEuro(previousNetCents) : '',
+    anzahlung_betrag: previousNetCents > 0 ? formatEuro(previousNetCents) : '',
   };
 }
 

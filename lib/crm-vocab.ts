@@ -60,6 +60,23 @@ export const isCallBlocked = (reason: string | null | undefined) => reason === '
 /** Rechnungen sind nur für gewonnene Kunden zulässig. */
 export const canInvoice = (status: string) => isWon(status);
 
+/**
+ * Rechnungsstufen: 50 % bei Auftragsfreigabe, 50 % bei Auftragsabschluss.
+ * `komplett` bleibt für Aufträge, die in einem Zug abgerechnet werden.
+ */
+export const INVOICE_KINDS = [
+  { value: 'anzahlung', label: 'Anzahlung', title: 'Anzahlungsrechnung', share: 50 },
+  { value: 'schluss', label: 'Restbetrag', title: 'Schlussrechnung', share: 50 },
+  { value: 'komplett', label: 'Gesamtbetrag', title: 'Rechnung', share: 100 },
+] as const;
+export type InvoiceKind = (typeof INVOICE_KINDS)[number]['value'];
+
+export const INVOICE_KIND_VALUES = INVOICE_KINDS.map(k => k.value) as readonly string[];
+export const invoiceKindLabel = (value: string | null | undefined) =>
+  INVOICE_KINDS.find(k => k.value === value)?.label ?? 'Rechnung';
+export const invoiceKindTitle = (value: string | null | undefined) =>
+  INVOICE_KINDS.find(k => k.value === value)?.title ?? 'Rechnung';
+
 export const formatEuro = (cents: number | null | undefined) =>
   typeof cents === 'number' && Number.isFinite(cents)
     ? (cents / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })

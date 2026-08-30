@@ -67,7 +67,12 @@ export default async function DocumentPage({
         </main>
       );
     }
-    extras = buildInvoiceExtras(rowToInvoice(invoiceRow), company.invoice_service_label || 'Erstellung einer Webseite');
+    const invoice = rowToInvoice(invoiceRow);
+    // Bei einer Schlussrechnung muss die zuvor berechnete Anzahlung ausgewiesen werden.
+    const previous = await db.prepare(
+      "SELECT COALESCE(SUM(net_cents),0) AS total FROM invoices WHERE lead_id=? AND status<>'storniert' AND issued_at < ?",
+    ).bind(leadId, invoice.issuedAt).first<{ total: number }>();
+    extras = buildInvoiceExtras(invoice, company.invoice_service_label || 'Erstellung einer Webseite', Number(previous?.total ?? 0));
   }
 
   const context = buildDocumentContext(lead, company, extras);
