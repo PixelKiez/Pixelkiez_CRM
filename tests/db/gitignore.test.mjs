@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { copyFileSync, readdirSync } from 'node:fs';
+import { copyFileSync, readdirSync, realpathSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { test } from 'node:test';
 import { backupVerified } from '../../lib/db/backup.mjs';
@@ -13,16 +13,27 @@ import { ROOT, buildLegacy, errorCode, insertSyntheticRows, tempDir } from './he
  * Migrationen und Test-Fixtures müssen versionierbar bleiben.
  */
 const hasGit = spawnSync('git', ['--version']).status === 0;
+/** Ohne globale/systemweite Git-Konfiguration: eine fremde excludesFile darf keine fehlende Regel verdecken. */
+const HERMETIC_GIT = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
 
-/** Prüft Pfade gegen die .gitignore des Repos in einem leeren Wegwerf-Repo: Pfad → ignoriert? */
+/**
+ * Prüft Pfade gegen die .gitignore des Repos in einem leeren Wegwerf-Repo: Pfad → ignoriert?
+ * Zählt nur Treffer aus genau dieser .gitignore.
+ */
 function ignored(paths) {
   const repo = tempDir();
-  execFileSync('git', ['init', '-q', repo]);
+  execFileSync('git', ['init', '-q', '--template=', repo], { env: HERMETIC_GIT });
   copyFileSync(join(ROOT, '.gitignore'), join(repo, '.gitignore'));
-  const result = spawnSync('git', ['-C', repo, 'check-ignore', '--no-index', '-v', '-n', '--stdin'], { input: paths.join('\n'), encoding: 'utf8' });
-  return Object.fromEntries(result.stdout.trim().split('\n').map((line) => {
+  const result = spawnSync('git', ['-C', repo, '-c', 'core.excludesFile=', 'check-ignore', '--no-index', '-v', '-n', '--stdin'], {
+    input: paths.join('\n'), encoding: 'utf8', env: HERMETIC_GIT,
+  });
+  assert.ok(result.status === 0 || result.status === 1, result.stderr);
+  const lines = result.stdout.trim().split('\n');
+  assert.equal(lines.length, paths.length, 'eine Antwort je Pfad');
+  return Object.fromEntries(lines.map((line) => {
     const [source, path] = line.split('\t');
-    return [path, source !== '::' && !source.split(':')[2].startsWith('!')];
+    const [file, , pattern] = source.split(':');
+    return [path, file === '.gitignore' && !pattern.startsWith('!')];
   }));
 }
 
@@ -49,8 +60,9 @@ test('erzeugte Datenbank- und Sicherungsdateien werden ignoriert', { skip: !hasG
     ...names.map(n => `data/backups/${n}`),
     ...names.map(n => `data/backups/${n}-journal`),
     'data/backups/notiz.txt',
-    // PXK_DB_BACKUP_DIR kann auf jeden Ordner im Repo zeigen
+    // PXK_DB_BACKUP_DIR kann auf jeden Ordner im Repo zeigen — auch Seitendateien einer geöffneten Kopie
     ...names.map(n => `backups/${basename(n)}`),
+    ...names.flatMap(n => ['-wal', '-shm', '-journal'].map(suffix => `backups/${basename(n)}${suffix}`)),
     'tmp/pre-0002_x-20261002T120000Z-1-abcdef.db.unverified',
   ];
   const result = ignored(generated);
@@ -68,8 +80,10 @@ test('Migrationen, Fixtures und Startdaten bleiben versionierbar', { skip: !hasG
 });
 
 test('kein versioniertes File fällt unter die Ignore-Regeln', { skip: !hasGit && 'git fehlt' }, (t) => {
-  const inRepo = spawnSync('git', ['-C', ROOT, 'rev-parse', '--is-inside-work-tree'], { encoding: 'utf8' });
-  if (inRepo.stdout.trim() !== 'true') return t.skip('kein Git-Arbeitsbaum (z. B. git-archive-Kopie)');
+  const top = spawnSync('git', ['-C', ROOT, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' });
+  if (top.status !== 0 || realpathSync(top.stdout.trim()) !== realpathSync(ROOT)) {
+    return t.skip('ROOT ist nicht die Wurzel eines Git-Arbeitsbaums (z. B. git-archive-Kopie)');
+  }
   const tracked = execFileSync('git', ['-C', ROOT, 'ls-files'], { encoding: 'utf8' }).trim().split('\n');
   const result = ignored(tracked);
   assert.deepEqual(Object.entries(result).filter(([, isIgnored]) => isIgnored).map(([path]) => path), []);

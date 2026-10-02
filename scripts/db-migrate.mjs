@@ -74,8 +74,10 @@ async function main() {
   const modeReason = reasons.join(',');
   const pathSource = env.SQLITE_PATH ? 'SQLITE_PATH' : 'default';
   const dbPath = resolveDbPath(env);
-  let migrationsDir = args.migrationsDir ?? env.PXK_MIGRATIONS_DIR ?? defaultMigrationsDir();
-  if (production && (args.migrationsDir || env.PXK_MIGRATIONS_DIR)) {
+  // Jede Angabe zählt als Abweichung — auch eine leere, die sonst still durchrutschen würde.
+  const migrationsOverride = args.migrationsDir ?? env.PXK_MIGRATIONS_DIR ?? null;
+  let migrationsDir = migrationsOverride || defaultMigrationsDir();
+  if (production && migrationsOverride !== null) {
     console.warn('PXK-DB Hinweis: abweichender Migrationsordner wird in Produktion ignoriert');
     migrationsDir = defaultMigrationsDir();
   }

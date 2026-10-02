@@ -37,6 +37,7 @@ yarn-error.log*
 
 # database backups (scripts/db-migrate.mjs); may contain OAuth tokens and business data
 *.db.unverified
+*.db.unverified-*
 /data/backups/
 
 # deployment and generated files

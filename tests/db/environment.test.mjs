@@ -19,8 +19,9 @@ test('Einordnung: jedes Produktionssignal genügt', () => {
   assert.equal(classifyEnvironment({ RAILWAY_ENVIRONMENT: 'production' }).production, true, 'älterer Variablenname');
 });
 
-test('Einordnung: gewöhnliche Entwicklung', () => {
-  for (const env of [{}, { NODE_ENV: '' }, { NODE_ENV: 'development' }, { NODE_ENV: 'test' }, { NODE_ENV: ' Development ' }]) {
+test('Einordnung: gewöhnliche Entwicklung (auch mit Railway-CLI-Zugangstoken in der Shell)', () => {
+  for (const env of [{}, { NODE_ENV: '' }, { NODE_ENV: 'development' }, { NODE_ENV: 'test' }, { NODE_ENV: ' Development ' },
+    { RAILWAY_TOKEN: 't' }, { RAILWAY_API_TOKEN: 't', NODE_ENV: 'development' }, { RAILWAY_PROJECT_ID: '  ', RAILWAY_ENVIRONMENT_NAME: '' }]) {
     assert.deepEqual(classifyEnvironment(env), { production: false, mode: 'development', reasons: ['kein-Produktionssignal'] }, JSON.stringify(env));
   }
 });
@@ -34,6 +35,13 @@ test('Einordnung: Widersprüche und verdächtige Railway-Kontexte enden bei Prod
     [{ RAILWAY_ENVIRONMENT_NAME: 'pr-12' }, ['RAILWAY_ENVIRONMENT_NAME=pr-12(Railway)']],
     [{ RAILWAY_ENVIRONMENT_NAME: '', RAILWAY_PROJECT_ID: 'p-1' }, ['RAILWAY_PROJECT_ID(Railway-ohne-Umgebungsnamen)']],
     [{ NODE_ENV: 'test', RAILWAY_SERVICE_ID: 's-1' }, ['RAILWAY_SERVICE_ID(Railway-ohne-Umgebungsnamen)', 'NODE_ENV=test(überstimmt)']],
+    // ein leerer neuer Name verdeckt das ältere RAILWAY_ENVIRONMENT nicht
+    [{ RAILWAY_ENVIRONMENT_NAME: '', RAILWAY_ENVIRONMENT: 'production' }, ['RAILWAY_ENVIRONMENT=production']],
+    [{ RAILWAY_ENVIRONMENT_NAME: ' ', RAILWAY_ENVIRONMENT: 'Production', NODE_ENV: 'development' }, ['RAILWAY_ENVIRONMENT=production', 'NODE_ENV=development(überstimmt)']],
+    // jede andere nicht leere RAILWAY_*-Variable ist Railway-Kontext; ausgegeben wird nur der Name
+    [{ RAILWAY_REPLICA_ID: 'r-geheim' }, ['RAILWAY_REPLICA_ID(Railway-ohne-Umgebungsnamen)']],
+    [{ RAILWAY_VOLUME_MOUNT_PATH: '/app/data' }, ['RAILWAY_VOLUME_MOUNT_PATH(Railway-ohne-Umgebungsnamen)']],
+    [{ RAILWAY_PUBLIC_DOMAIN: 'x.up.railway.app', RAILWAY_TOKEN: 't' }, ['RAILWAY_PUBLIC_DOMAIN(Railway-ohne-Umgebungsnamen)']],
   ];
   for (const [env, reasons] of cases) {
     assert.deepEqual(classifyEnvironment(env), { production: true, mode: 'production', reasons }, JSON.stringify(env));
@@ -106,4 +114,16 @@ test('.env-Auswahl folgt derselben Einordnung (Railway-Signal → .env.productio
   writeFileSync(join(cwd, '.env.development'), `SQLITE_PATH=${join(cwd, 'aus-development.db')}\n`);
   const result = run(['--report'], { ...RAILWAY_ONLY, PXK_MIGRATIONS_DIR: MIGRATIONS_DIR }, cwd);
   assert.match(result.stdout, /sqlite_path=SQLITE_PATH .*aus-production\.db/);
+  const dev = run(['--report'], { PXK_MIGRATIONS_DIR: MIGRATIONS_DIR }, cwd);
+  assert.match(dev.stdout, /sqlite_path=SQLITE_PATH .*aus-development\.db/, 'ohne Produktionssignal .env.development');
+});
+
+test('Produktion: auch ein leerer abweichender Migrationsordner wird ignoriert', () => {
+  const path = join(tempDir(), 'crm.db');
+  buildLegacy(path, 'S5').close();
+  const result = run(['--report'], { ...RAILWAY_ONLY, PXK_MIGRATIONS_DIR: '', SQLITE_PATH: path });
+  assert.equal(result.status, 0);
+  assert.match(result.stderr, /abweichender Migrationsordner wird in Produktion ignoriert/);
+  assert.match(result.stdout, /migration_files=\d+ \(letzte \d{4}_/, 'Standardordner geladen');
+  assert.match(result.stdout, /verdict=legacy-current-adoptable/);
 });
