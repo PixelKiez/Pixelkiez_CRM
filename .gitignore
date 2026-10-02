@@ -33,6 +33,11 @@ yarn-error.log*
 *.db
 *.db-wal
 *.db-shm
+*.db-journal
+
+# database backups (scripts/db-migrate.mjs); may contain OAuth tokens and business data
+*.db.unverified
+/data/backups/
 
 # deployment and generated files
 .vercel
