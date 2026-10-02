@@ -1,0 +1,1066 @@
+{
+  "_provenance": {
+    "description": "Schema-Fingerabdruck einer Datenbank, die der echte Code von cd2c098 erzeugt hat (lib/database.ts ensureDatabase() auf leerer Datei; TypeScript per typescript.transpileModule geladen, better-sqlite3 13.0.3 / SQLite 3.53.4). Nie aus 0001_baseline.sql erzeugen — sonst prüft AC1 zirkulär.",
+    "base_sha": "cd2c098f5c054d6a00098188c198f5ce644449be",
+    "source_db_sha256": "77ee2870f279344e4b81097064b862a833938b7b5cf2c573c153083f3376c060",
+    "generated_with": "lib/db/fingerprint.mjs fingerprint()"
+  },
+  "hashes": {
+    "structural": "ac1e7cae8725d7467fb162d56a898cdfa2aa3df4dd1bd34346120ec6270ca5e6",
+    "text": "97a2e18dc5b2a334c6c1420de742422462b3d6ad16acdef5f5b74d9b8825069d"
+  },
+  "structural": {
+    "tables": {
+      "activities": {
+        "columns": [
+          [
+            0,
+            "id",
+            "INTEGER",
+            0,
+            null,
+            1,
+            0
+          ],
+          [
+            1,
+            "lead_id",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            2,
+            "type",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            3,
+            "detail",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            4,
+            "created_at",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            5,
+            "actor_email",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ]
+        ],
+        "withoutRowid": 0,
+        "strict": 0,
+        "autoincrement": true,
+        "indexes": [
+          {
+            "name": "idx_activities_lead_id",
+            "unique": 0,
+            "origin": "c",
+            "partial": 0,
+            "keys": [
+              [
+                0,
+                1,
+                "lead_id",
+                0,
+                "BINARY"
+              ],
+              [
+                1,
+                4,
+                "created_at",
+                1,
+                "BINARY"
+              ]
+            ]
+          }
+        ],
+        "foreignKeys": []
+      },
+      "appointments": {
+        "columns": [
+          [
+            0,
+            "id",
+            "INTEGER",
+            0,
+            null,
+            1,
+            0
+          ],
+          [
+            1,
+            "lead_id",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            2,
+            "title",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            3,
+            "start_ts",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            4,
+            "end_ts",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            5,
+            "location",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            6,
+            "notes",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            7,
+            "gcal_event_id",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            8,
+            "gcal_link",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            9,
+            "status",
+            "TEXT",
+            1,
+            "'geplant'",
+            0,
+            0
+          ],
+          [
+            10,
+            "created_at",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            11,
+            "updated_at",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ]
+        ],
+        "withoutRowid": 0,
+        "strict": 0,
+        "autoincrement": true,
+        "indexes": [
+          {
+            "name": "idx_appointments_lead_id",
+            "unique": 0,
+            "origin": "c",
+            "partial": 0,
+            "keys": [
+              [
+                0,
+                1,
+                "lead_id",
+                0,
+                "BINARY"
+              ],
+              [
+                1,
+                3,
+                "start_ts",
+                1,
+                "BINARY"
+              ]
+            ]
+          },
+          {
+            "name": "idx_appointments_start",
+            "unique": 0,
+            "origin": "c",
+            "partial": 0,
+            "keys": [
+              [
+                0,
+                3,
+                "start_ts",
+                0,
+                "BINARY"
+              ]
+            ]
+          }
+        ],
+        "foreignKeys": []
+      },
+      "email_templates": {
+        "columns": [
+          [
+            0,
+            "id",
+            "INTEGER",
+            0,
+            null,
+            1,
+            0
+          ],
+          [
+            1,
+            "slug",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            2,
+            "name",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            3,
+            "kind",
+            "TEXT",
+            1,
+            "'general'",
+            0,
+            0
+          ],
+          [
+            4,
+            "subject",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            5,
+            "body_html",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            6,
+            "updated_at",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ]
+        ],
+        "withoutRowid": 0,
+        "strict": 0,
+        "autoincrement": true,
+        "indexes": [
+          {
+            "name": "sqlite_autoindex_email_templates_1",
+            "unique": 1,
+            "origin": "u",
+            "partial": 0,
+            "keys": [
+              [
+                0,
+                1,
+                "slug",
+                0,
+                "BINARY"
+              ]
+            ]
+          }
+        ],
+        "foreignKeys": []
+      },
+      "invoices": {
+        "columns": [
+          [
+            0,
+            "id",
+            "INTEGER",
+            0,
+            null,
+            1,
+            0
+          ],
+          [
+            1,
+            "lead_id",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            2,
+            "number",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            3,
+            "issued_at",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            4,
+            "service_date",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            5,
+            "net_cents",
+            "INTEGER",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            6,
+            "vat_rate",
+            "INTEGER",
+            1,
+            "19",
+            0,
+            0
+          ],
+          [
+            7,
+            "vat_cents",
+            "INTEGER",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            8,
+            "gross_cents",
+            "INTEGER",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            9,
+            "title",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            10,
+            "status",
+            "TEXT",
+            1,
+            "'offen'",
+            0,
+            0
+          ],
+          [
+            11,
+            "paid_at",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            12,
+            "notes",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            13,
+            "created_at",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            14,
+            "updated_at",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            15,
+            "kind",
+            "TEXT",
+            1,
+            "'komplett'",
+            0,
+            0
+          ],
+          [
+            16,
+            "share_percent",
+            "INTEGER",
+            1,
+            "100",
+            0,
+            0
+          ]
+        ],
+        "withoutRowid": 0,
+        "strict": 0,
+        "autoincrement": true,
+        "indexes": [
+          {
+            "name": "idx_invoices_issued",
+            "unique": 0,
+            "origin": "c",
+            "partial": 0,
+            "keys": [
+              [
+                0,
+                3,
+                "issued_at",
+                0,
+                "BINARY"
+              ]
+            ]
+          },
+          {
+            "name": "idx_invoices_lead_id",
+            "unique": 0,
+            "origin": "c",
+            "partial": 0,
+            "keys": [
+              [
+                0,
+                1,
+                "lead_id",
+                0,
+                "BINARY"
+              ],
+              [
+                1,
+                3,
+                "issued_at",
+                1,
+                "BINARY"
+              ]
+            ]
+          },
+          {
+            "name": "sqlite_autoindex_invoices_1",
+            "unique": 1,
+            "origin": "u",
+            "partial": 0,
+            "keys": [
+              [
+                0,
+                2,
+                "number",
+                0,
+                "BINARY"
+              ]
+            ]
+          }
+        ],
+        "foreignKeys": []
+      },
+      "leads": {
+        "columns": [
+          [
+            0,
+            "id",
+            "TEXT",
+            0,
+            null,
+            1,
+            0
+          ],
+          [
+            1,
+            "status",
+            "TEXT",
+            1,
+            "'Neu'",
+            0,
+            0
+          ],
+          [
+            2,
+            "priority",
+            "TEXT",
+            1,
+            "'Mittel'",
+            0,
+            0
+          ],
+          [
+            3,
+            "score",
+            "INTEGER",
+            1,
+            "0",
+            0,
+            0
+          ],
+          [
+            4,
+            "name",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            5,
+            "category",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            6,
+            "street",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            7,
+            "zip",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            8,
+            "city",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            9,
+            "phone",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            10,
+            "email",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            11,
+            "website",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            12,
+            "website_status",
+            "TEXT",
+            1,
+            "'Prüfen'",
+            0,
+            0
+          ],
+          [
+            13,
+            "website_class",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            14,
+            "age_score",
+            "INTEGER",
+            1,
+            "0",
+            0,
+            0
+          ],
+          [
+            15,
+            "problems",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            16,
+            "pitch",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            17,
+            "source",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            18,
+            "last_contact",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            19,
+            "next_action",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            20,
+            "follow_up",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            21,
+            "notes",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            22,
+            "updated_at",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            23,
+            "price_cents",
+            "INTEGER",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            24,
+            "won_at",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            25,
+            "lost_reason",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            26,
+            "recontact_at",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            27,
+            "contact_attempts",
+            "INTEGER",
+            1,
+            "0",
+            0,
+            0
+          ],
+          [
+            28,
+            "owner_email",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ]
+        ],
+        "withoutRowid": 0,
+        "strict": 0,
+        "autoincrement": false,
+        "indexes": [
+          {
+            "name": "idx_leads_follow_up",
+            "unique": 0,
+            "origin": "c",
+            "partial": 0,
+            "keys": [
+              [
+                0,
+                20,
+                "follow_up",
+                0,
+                "BINARY"
+              ]
+            ]
+          },
+          {
+            "name": "idx_leads_status_score",
+            "unique": 0,
+            "origin": "c",
+            "partial": 0,
+            "keys": [
+              [
+                0,
+                1,
+                "status",
+                0,
+                "BINARY"
+              ],
+              [
+                1,
+                3,
+                "score",
+                1,
+                "BINARY"
+              ]
+            ]
+          },
+          {
+            "name": "idx_leads_website_status",
+            "unique": 0,
+            "origin": "c",
+            "partial": 0,
+            "keys": [
+              [
+                0,
+                12,
+                "website_status",
+                0,
+                "BINARY"
+              ]
+            ]
+          },
+          {
+            "name": "sqlite_autoindex_leads_1",
+            "unique": 1,
+            "origin": "pk",
+            "partial": 0,
+            "keys": [
+              [
+                0,
+                0,
+                "id",
+                0,
+                "BINARY"
+              ]
+            ]
+          }
+        ],
+        "foreignKeys": []
+      },
+      "settings": {
+        "columns": [
+          [
+            0,
+            "key",
+            "TEXT",
+            0,
+            null,
+            1,
+            0
+          ],
+          [
+            1,
+            "value",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ]
+        ],
+        "withoutRowid": 0,
+        "strict": 0,
+        "autoincrement": false,
+        "indexes": [
+          {
+            "name": "sqlite_autoindex_settings_1",
+            "unique": 1,
+            "origin": "pk",
+            "partial": 0,
+            "keys": [
+              [
+                0,
+                0,
+                "key",
+                0,
+                "BINARY"
+              ]
+            ]
+          }
+        ],
+        "foreignKeys": []
+      },
+      "users": {
+        "columns": [
+          [
+            0,
+            "email",
+            "TEXT",
+            0,
+            null,
+            1,
+            0
+          ],
+          [
+            1,
+            "display_name",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            2,
+            "signature",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            3,
+            "phone",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            4,
+            "google_tokens",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            5,
+            "google_email",
+            "TEXT",
+            0,
+            null,
+            0,
+            0
+          ],
+          [
+            6,
+            "google_calendar_id",
+            "TEXT",
+            1,
+            "'primary'",
+            0,
+            0
+          ],
+          [
+            7,
+            "created_at",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ],
+          [
+            8,
+            "updated_at",
+            "TEXT",
+            1,
+            null,
+            0,
+            0
+          ]
+        ],
+        "withoutRowid": 0,
+        "strict": 0,
+        "autoincrement": false,
+        "indexes": [
+          {
+            "name": "sqlite_autoindex_users_1",
+            "unique": 1,
+            "origin": "pk",
+            "partial": 0,
+            "keys": [
+              [
+                0,
+                0,
+                "email",
+                0,
+                "BINARY"
+              ]
+            ]
+          }
+        ],
+        "foreignKeys": []
+      }
+    },
+    "triggers": [],
+    "views": []
+  },
+  "text": {
+    "index:idx_activities_lead_id": "CREATE INDEX idx_activities_lead_id ON activities(lead_id, created_at DESC)",
+    "index:idx_appointments_lead_id": "CREATE INDEX idx_appointments_lead_id ON appointments(lead_id, start_ts DESC)",
+    "index:idx_appointments_start": "CREATE INDEX idx_appointments_start ON appointments(start_ts)",
+    "index:idx_invoices_issued": "CREATE INDEX idx_invoices_issued ON invoices(issued_at)",
+    "index:idx_invoices_lead_id": "CREATE INDEX idx_invoices_lead_id ON invoices(lead_id, issued_at DESC)",
+    "index:idx_leads_follow_up": "CREATE INDEX idx_leads_follow_up ON leads(follow_up)",
+    "index:idx_leads_status_score": "CREATE INDEX idx_leads_status_score ON leads(status, score DESC)",
+    "index:idx_leads_website_status": "CREATE INDEX idx_leads_website_status ON leads(website_status)",
+    "table:activities": "CREATE TABLE activities (id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id TEXT NOT NULL, type TEXT NOT NULL, detail TEXT, created_at TEXT NOT NULL, actor_email TEXT)",
+    "table:appointments": "CREATE TABLE appointments (id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id TEXT NOT NULL, title TEXT NOT NULL, start_ts TEXT NOT NULL, end_ts TEXT NOT NULL, location TEXT, notes TEXT, gcal_event_id TEXT, gcal_link TEXT, status TEXT NOT NULL DEFAULT 'geplant', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    "table:email_templates": "CREATE TABLE email_templates (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'general', subject TEXT NOT NULL, body_html TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    "table:invoices": "CREATE TABLE invoices (id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id TEXT NOT NULL, number TEXT NOT NULL UNIQUE, issued_at TEXT NOT NULL, service_date TEXT, net_cents INTEGER NOT NULL, vat_rate INTEGER NOT NULL DEFAULT 19, vat_cents INTEGER NOT NULL, gross_cents INTEGER NOT NULL, title TEXT, status TEXT NOT NULL DEFAULT 'offen', paid_at TEXT, notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'komplett', share_percent INTEGER NOT NULL DEFAULT 100)",
+    "table:leads": "CREATE TABLE leads (id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'Neu', priority TEXT NOT NULL DEFAULT 'Mittel', score INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, category TEXT, street TEXT, zip TEXT, city TEXT, phone TEXT, email TEXT, website TEXT, website_status TEXT NOT NULL DEFAULT 'Prüfen', website_class TEXT, age_score INTEGER NOT NULL DEFAULT 0, problems TEXT, pitch TEXT, source TEXT, last_contact TEXT, next_action TEXT, follow_up TEXT, notes TEXT, updated_at TEXT NOT NULL, price_cents INTEGER, won_at TEXT, lost_reason TEXT, recontact_at TEXT, contact_attempts INTEGER NOT NULL DEFAULT 0, owner_email TEXT)",
+    "table:settings": "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)",
+    "table:users": "CREATE TABLE users (email TEXT PRIMARY KEY, display_name TEXT NOT NULL, signature TEXT, phone TEXT, google_tokens TEXT, google_email TEXT, google_calendar_id TEXT NOT NULL DEFAULT 'primary', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+  }
+}
