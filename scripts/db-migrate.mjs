@@ -15,14 +15,16 @@
  * ersten Lauf wieder entfernen), PXK_MIGRATIONS_DIR (nur Tests; in Produktion
  * ignoriert). Diese Variablen werden wie bei Next.js auch aus .env-Dateien
  * gelesen; echte Umgebungsvariablen haben Vorrang.
- * Produktion = NODE_ENV=production (setzt Nixpacks im Railway-Image).
+ * Produktion: siehe lib/db/environment.mjs (NODE_ENV oder
+ * RAILWAY_ENVIRONMENT_NAME = production; im Zweifel Produktion).
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parseEnv } from 'node:util';
 import { EXIT_CODES, MigrationError } from '../lib/db/errors.mjs';
 import { defaultMigrationsDir, runMigrations } from '../lib/db/migrate.mjs';
-import { isProductionEnv, openDatabase, resolveDbPath } from '../lib/db/open.mjs';
+import { classifyEnvironment } from '../lib/db/environment.mjs';
+import { openDatabase, resolveDbPath } from '../lib/db/open.mjs';
 import { buildReport } from '../lib/db/report.mjs';
 import { runSeeds } from '../lib/db/seed.mjs';
 
@@ -51,7 +53,7 @@ const ENV_KEYS = ['SQLITE_PATH', 'PXK_DB_BACKUP_DIR', 'PXK_DB_ADOPT_LEGACY', 'PX
  * nur in .env.local). Nur die eigenen Variablen; vorhandene bleiben.
  */
 function loadEnvFiles(env, cwd) {
-  const mode = isProductionEnv(env) ? 'production' : 'development';
+  const { mode } = classifyEnvironment(env);
   for (const file of [`.env.${mode}.local`, '.env.local', `.env.${mode}`, '.env']) {
     const path = join(cwd, file);
     if (!existsSync(path)) continue;
@@ -68,8 +70,8 @@ async function main() {
     return 0;
   }
   loadEnvFiles(env, process.cwd());
-  const production = isProductionEnv(env);
-  const mode = production ? 'production' : 'development';
+  const { production, mode, reasons } = classifyEnvironment(env);
+  const modeReason = reasons.join(',');
   const pathSource = env.SQLITE_PATH ? 'SQLITE_PATH' : 'default';
   const dbPath = resolveDbPath(env);
   let migrationsDir = args.migrationsDir ?? env.PXK_MIGRATIONS_DIR ?? defaultMigrationsDir();
@@ -79,7 +81,7 @@ async function main() {
   }
 
   if (args.report || args.check) {
-    const report = buildReport({ dbPath, migrationsDir, mode, pathSource });
+    const report = buildReport({ dbPath, migrationsDir, mode, modeReason, pathSource });
     for (const line of report.lines) console.log(line);
     if (args.report) return 0;
     return report.ok ? 0 : EXIT_CODES.UNKNOWN_SCHEMA;
@@ -89,7 +91,7 @@ async function main() {
   if (adoptLegacy !== null && !/^S[1-5]$/.test(adoptLegacy)) {
     throw new MigrationError('USAGE', String(adoptLegacy), 'Altstand muss S1 bis S5 sein');
   }
-  console.log(`PXK-DB mode=${mode} sqlite_path=${pathSource} ${dbPath}`);
+  console.log(`PXK-DB mode=${mode} sqlite_path=${pathSource} ${dbPath} mode_reason=${modeReason}`);
   const allowFresh = env.PXK_DB_ALLOW_FRESH === '1';
   // Fehlt die Datei in Produktion, wird sie gar nicht erst angelegt.
   if (production && !allowFresh && (!existsSync(dbPath) || statSync(dbPath).size === 0)) {

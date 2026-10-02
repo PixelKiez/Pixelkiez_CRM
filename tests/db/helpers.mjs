@@ -10,6 +10,13 @@ import { openDatabase } from '../../lib/db/open.mjs';
 import { LEGACY_VARIANTS } from '../../lib/db/legacy.mjs';
 import { splitStatements } from '../../lib/db/sql-split.mjs';
 
+// Der Runner leitet Produktionsregeln aus der Umgebung ab. Tests setzen sie
+// ausdrücklich (production: true bzw. env im Kindprozess), damit eine
+// Entwickler- oder CI-Shell mit NODE_ENV/RAILWAY_* das Ergebnis nicht ändert.
+for (const name of Object.keys(process.env)) {
+  if (name === 'NODE_ENV' || name.startsWith('RAILWAY_')) delete process.env[name];
+}
+
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export const MIGRATIONS_DIR = join(ROOT, 'db', 'migrations');
 export const GOLDEN = JSON.parse(readFileSync(join(ROOT, 'tests/db/fixtures/schema-cd2c098.json'), 'utf8'));
