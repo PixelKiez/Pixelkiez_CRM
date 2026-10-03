@@ -8,9 +8,13 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node scripts/db-migrate.mjs --report; next start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node scripts/db-migrate.mjs",
+    "db:report": "node scripts/db-migrate.mjs --report",
+    "db:check": "node scripts/db-migrate.mjs --check",
+    "test:db": "node --test \"tests/db/*.test.mjs\""
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
