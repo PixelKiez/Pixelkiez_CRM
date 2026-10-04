@@ -9,6 +9,10 @@
  *   node scripts/db-migrate.mjs --adopt-legacy=S2
  *                                            älteren Altstand S1–S4 ausdrücklich übernehmen
  *
+ * `npm start` ist `node scripts/db-migrate.mjs && next start`: Scheitert
+ * dieser Schritt (Exit ≠ 0), startet die App nicht. Sie selbst legt kein
+ * Schema an und schreibt keine Seeds (lib/database.ts, lib/d1-node.ts).
+ *
  * Umgebung: SQLITE_PATH (wie die App), PXK_DB_BACKUP_DIR (Sicherungsziel; in
  * Produktion Pflicht, sobald migriert wird), PXK_DB_ADOPT_LEGACY=Sx,
  * PXK_DB_ALLOW_FRESH=1 (neue leere Datenbank in Produktion zulassen; nach dem
@@ -93,6 +97,8 @@ async function main() {
   if (adoptLegacy !== null && !/^S[1-5]$/.test(adoptLegacy)) {
     throw new MigrationError('USAGE', String(adoptLegacy), 'Altstand muss S1 bis S5 sein');
   }
+  // Nur die Laufzeitversion als Diagnose — keine Umgebungswerte.
+  console.log(`PXK-DB runtime node=${process.version}`);
   console.log(`PXK-DB mode=${mode} sqlite_path=${pathSource} ${dbPath} mode_reason=${modeReason}`);
   const allowFresh = env.PXK_DB_ALLOW_FRESH === '1';
   // Fehlt die Datei in Produktion, wird sie gar nicht erst angelegt.
@@ -105,7 +111,12 @@ async function main() {
   }
   const backupDir = env.PXK_DB_BACKUP_DIR || (production ? null : join(dirname(dbPath), 'backups'));
 
-  const db = openDatabase(dbPath, 'apply');
+  let db;
+  try {
+    db = openDatabase(dbPath, 'apply');
+  } catch (error) {
+    throw unreadable(error, dbPath);
+  }
   try {
     const result = await runMigrations(db, {
       migrationsDir,
@@ -122,10 +133,22 @@ async function main() {
     console.log(
       `PXK-DB ok head=${result.head} ${result.actions.length ? result.actions.join(', ') : 'noop'}${seeds ? ` seeds=${seeds.templatesInserted}/${seeds.leadsInserted}` : ''}`,
     );
+  } catch (error) {
+    throw unreadable(error, dbPath);
   } finally {
     db.close();
   }
   return 0;
+}
+
+/**
+ * Eine beschädigte oder fremde Datei meldet SQLite erst beim ersten Zugriff.
+ * Das ist ein klarer Grund, den Start zu verweigern — kein interner Fehler.
+ */
+function unreadable(error, dbPath) {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  if (code !== 'SQLITE_NOTADB' && !code.startsWith('SQLITE_CORRUPT')) return error;
+  return new MigrationError('UNKNOWN_SCHEMA', dbPath, `keine lesbare SQLite-Datenbank (${code}: ${error.message}) — Datei bzw. Volume prüfen`);
 }
 
 main().then(

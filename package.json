@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "node scripts/db-migrate.mjs --report; next start",
+    "start": "node scripts/db-migrate.mjs && next start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:migrate": "node scripts/db-migrate.mjs",
     "db:report": "node scripts/db-migrate.mjs --report",
