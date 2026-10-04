@@ -8,14 +8,14 @@
  *
  * Ablauf
  *  1. Quelle nur lesend öffnen und per SQLite-Online-Backup nach
- *     <workdir>/copy.db kopieren (WAL-sicher, nie die Hauptdatei allein). Die
+ *     <workdir>/ac3-XXXXXX/copy.db kopieren (WAL-sicher, nie die Hauptdatei allein). Die
  *     Quelle bleibt unverändert: Hauptdatei und -wal (sha256 vorher/nachher, nur
  *     im Speicher). -shm ist der WAL-Index im gemeinsamen Speicher, keine Daten;
  *     jeder Leser darf ihn nach einem harten Abbruch neu aufbauen.
  *  2. Vorher messen: integrity_check, Einordnung, Schema-Fingerabdruck, je
  *     Tabelle Zeilenzahl und Inhalts-Prüfsumme.
  *  3. Lauf 1: `node scripts/db-migrate.mjs` (erster Teil von npm start) im
- *     Produktionsmodus, Sicherungsziel <workdir>/backups.
+ *     Produktionsmodus, Sicherungsziel <workdir>/ac3-XXXXXX/backups.
  *  4. Nachher messen; Lauf 2 muss ein No-op sein (keine Sicherung, Datei unverändert).
  *  5. Geschäftsdaten (Zeilen und Prüfsummen je Tabelle) müssen gleich sein; die
  *     Migrations-Metadaten (schema_migrations, user_version) werden getrennt
@@ -35,21 +35,32 @@
  * unversionierten Dateien) und einen Lauf 1, der tatsächlich etwas migriert —
  * eine schon migrierte Kopie ist kein AC3-Beleg.
  *
- * <workdir> enthält danach Klartext-Kopien (copy.db, backups/): nur in einem
- * isolierten Arbeitsbereich verwenden (Ordner 0700, Kopie 0600) und nach der
- * Auswertung löschen.
+ * Klartext gehört dem Prüfstand (M-4): copy.db, backups/ (mit .partial-*),
+ * -wal/-shm entstehen in <workdir>/ac3-XXXXXX (0700, Kopie 0600) und werden am Ende
+ * JEDES Laufs gelöscht — bei PASS, FAIL, interner Ausnahme, SIGINT/SIGTERM/
+ * SIGHUP; ein laufender Migrationsschritt wird vorher beendet. Ein vom
+ * Prüfstand angelegtes <workdir> verschwindet mit, ein vorhandenes leeres
+ * bleibt leer zurück; die Quelle wird nie gelöscht. Das Urteil fällt erst nach
+ * nachgewiesenem Löschen (cleanup=verified). Abgefangen werden SIGHUP, SIGINT,
+ * SIGQUIT und SIGTERM; SIGKILL (und seltene Signale wie SIGUSR2) gegen den
+ * Prüfstand hinterlassen ac3-XXXXXX — <workdir> daher nie in synchronisierten Ordnern.
  *
- * Exit: 0 PASS · 1 FAIL · 2 Aufruf verweigert
+ * Exit: 0 PASS · 1 FAIL · 2 Aufruf verweigert · 3 Löschen nicht nachgewiesen
+ * (Klartext kann übrig sein) · 129/130/131/143 abgebrochen durch SIGHUP/SIGINT/
+ * SIGQUIT/SIGTERM (FAIL, gelöscht) · 17 Node-Laufzeit nicht unterstützt (lib/db/runtime.mjs)
  */
+// Muss der erste Import bleiben: bricht auf nicht unterstützter Node-Laufzeit ab, bevor better-sqlite3 lädt.
+import '../lib/db/runtime-gate.mjs';
 import Database from 'better-sqlite3';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { classifyEnvironment } from '../lib/db/environment.mjs';
 import { LEDGER_TABLE, fingerprint, sameFingerprint } from '../lib/db/fingerprint.mjs';
 import { checkLedger, classify, createReferences, loadMigrations } from '../lib/db/migrate.mjs';
+import { assertOpenable, openProblem } from '../lib/db/open.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = join(ROOT, 'scripts', 'db-migrate.mjs');
@@ -67,6 +78,8 @@ export function parseArgs(argv) {
   }
   for (const key of ['source', 'workdir']) {
     if (!args[key] || !isAbsolute(args[key])) throw new Refusal(`--${key} muss ein absoluter Pfad sein`);
+    // ohne ..-Abschnitte: Prüfung, Anlegen und Löschen meinen sonst verschiedene Ordner
+    args[key] = resolve(args[key]);
   }
   return args;
 }
@@ -77,8 +90,11 @@ export function checkIsolation({ source, workdir }, env = process.env) {
   const present = ENV_FILES.filter(file => existsSync(join(ROOT, file)));
   if (present.length) throw new Refusal(`.env-Dateien im Projekt (${present.join(', ')}) würden den Migrationsschritt beeinflussen`);
   if (!existsSync(source) || !statSync(source).isFile()) throw new Refusal('Quelle fehlt oder ist keine Datei');
-  // SQLite verwirft beim Öffnen einer leeren Datei (auch schreibgeschützt) ein daneben liegendes -wal.
-  if (statSync(source).size === 0) throw new Refusal('Quelle ist leer — nie öffnen, ein -wal daneben ginge verloren');
+  // SQLite verwirft beim Öffnen einer leeren oder abgeschnittenen Datei ein daneben
+  // liegendes -wal oder legt ein -shm an — solche Quellen werden nie geöffnet (lib/db/open.mjs).
+  const file = openProblem(source);
+  if (file.main.state === 'empty') throw new Refusal('Quelle ist leer — nie öffnen, ein -wal daneben ginge verloren');
+  if (file.verdict) throw new Refusal(`Quelle ist keine gültige SQLite-Datei (${file.main.reason ?? file.verdict}) — nicht geöffnet, -wal/-shm unberührt`);
   if (existsSync(workdir) && !statSync(workdir).isDirectory()) throw new Refusal('Arbeitsordner ist kein Ordner');
   // Leer heißt auch: die Quelle liegt nicht darin.
   if (existsSync(workdir) && readdirSync(workdir).length) throw new Refusal('Arbeitsordner existiert und ist nicht leer');
@@ -170,6 +186,7 @@ const backupFiles = (dir) => (existsSync(dir) ? readdirSync(dir).filter(f => /^p
  * wenn die Kopie scheitert. `source` ist bereits der aufgelöste echte Pfad.
  */
 async function copyOnline(source, target) {
+  assertOpenable(source);
   const existed = Object.fromEntries(sidecars.map(s => [s, existsSync(source + s)]));
   closeSync(openSync(target, 'wx', 0o600));
   let src;
@@ -184,22 +201,116 @@ async function copyOnline(source, target) {
   }
 }
 
-/** Der Migrationsschritt des Kandidaten — seine Ausgabe wird nur ausgewertet, nie weitergegeben. */
-function runCandidate(copy, backups) {
-  const result = spawnSync(process.execPath, [CLI], {
+/** Abbruch eines Laufs durch ein Signal; Aufräumen und Urteil übernimmt verifyCopy. */
+class Interrupted extends Error {}
+
+/** Exit-Code nach Abbruch (128 + Signalnummer). */
+const SIGNAL_EXIT = { SIGHUP: 129, SIGINT: 130, SIGQUIT: 131, SIGTERM: 143 };
+/** So lange darf der Migrationsschritt nach SIGTERM weiterlaufen, dann SIGKILL. */
+const CHILD_GRACE_MS = 2000;
+const MAX_OUTPUT = 64 * 1024 * 1024;
+
+/** Zustand eines Laufs: Ausgabe, Fehlschläge, Quelle (aufgelöst), Arbeitsbereich, Kindprozess, Abbruchsignal. */
+export function newRun() {
+  return { lines: [], failures: [], source: null, scratch: null, child: null, interrupted: null };
+}
+
+/** Bricht ab, sobald ein Signal eingegangen ist — vor jedem weiteren Schritt. */
+function checkInterrupted(run) {
+  if (run.interrupted) throw new Interrupted(run.interrupted);
+}
+
+/** Der Migrationsschritt des Kandidaten (asynchron, damit ein Signal ihn vor dem Löschen beendet); Ausgabe nie weitergegeben. */
+async function runCandidate(run, copy, backups) {
+  checkInterrupted(run);
+  const child = spawn(process.execPath, [CLI], {
     cwd: ROOT,
     env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', SQLITE_PATH: copy, PXK_DB_BACKUP_DIR: backups, NODE_ENV: 'production' },
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
-  const ok = /^PXK-DB ok head=(\d+) (.+?)(?: seeds=(\d+)\/(\d+))?$/m.exec(result.stdout ?? '');
+  const output = { stdout: [], stderr: [], bytes: 0 };
+  for (const name of ['stdout', 'stderr']) {
+    child[name].on('data', (chunk) => {
+      output.bytes += chunk.length;
+      // wie maxBuffer bei spawnSync: zu viel Ausgabe beendet den Schritt (SIGTERM, notfalls SIGKILL)
+      if (output.bytes > MAX_OUTPUT) stopChild(run);
+      else output[name].push(chunk);
+    });
+  }
+  const done = new Promise((settle) => {
+    child.once('error', () => settle({ status: null, signal: null }));
+    child.once('close', (status, signal) => settle({ status, signal }));
+  });
+  run.child = { process: child, done, stopping: false };
+  const { status, signal } = await done;
+  run.child = null;
+  checkInterrupted(run);
+  const stdout = Buffer.concat(output.stdout).toString('utf8');
+  const stderr = Buffer.concat(output.stderr).toString('utf8');
+  const ok = /^PXK-DB ok head=(\d+) (.+?)(?: seeds=(\d+)\/(\d+))?$/m.exec(stdout);
   return {
-    status: result.status,
-    error: result.status === 0 ? '-' : (/^PXK-DB \[([A-Z_]+)\]/m.exec(result.stderr ?? '')?.[1] ?? (result.signal ? `SIGNAL_${result.signal}` : 'INTERNAL')),
+    status,
+    error: status === 0 ? '-' : (/^PXK-DB \[([A-Z_]+)\]/m.exec(stderr)?.[1] ?? (signal ? `SIGNAL_${signal}` : 'INTERNAL')),
     head: ok ? Number(ok[1]) : null,
     actions: ok ? ok[2] : '-',
     seeds: ok && ok[3] !== undefined ? `${ok[3]}/${ok[4]}` : '-',
   };
+}
+
+/** Beendet einen noch laufenden Migrationsschritt (SIGTERM, nach CHILD_GRACE_MS SIGKILL) und wartet auf sein Ende. */
+function stopChild(run) {
+  const current = run.child;
+  if (!current) return Promise.resolve();
+  if (!current.stopping) {
+    current.stopping = true;
+    current.process.kill('SIGTERM');
+    const timer = setTimeout(() => current.process.kill('SIGKILL'), CHILD_GRACE_MS);
+    current.done.then(() => clearTimeout(timer));
+  }
+  return current.done;
+}
+
+/**
+ * Arbeitsbereich <workdir>/ac3-XXXXXX (mkdtemp, 0700). Fehlt <workdir>, legt der Prüfstand es an
+ * und merkt sich den obersten neuen Ordner; jeder Schritt steht sofort in run.scratch.
+ */
+function createScratch(run, workdir) {
+  run.scratch = { workdir, created: null, root: null };
+  run.scratch.created = mkdirSync(workdir, { recursive: true, mode: 0o700 }) ?? null;
+  chmodSync(workdir, 0o700);
+  run.scratch.root = mkdtempSync(join(workdir, 'ac3-'));
+  return run.scratch.root;
+}
+
+const isWithin = (path, dir) => {
+  const rel = relative(dir, path);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+};
+
+/**
+ * Löscht den Arbeitsbereich, sobald kein Migrationsschritt mehr läuft, und
+ * weist nach, dass nichts übrig ist. Liegt die Quelle (aufgelöst) im zu
+ * löschenden Ordner, wird nichts gelöscht und das Aufräumen gilt als gescheitert.
+ * @returns {Promise<boolean>} true = nachweislich nichts übrig
+ */
+async function cleanup(run) {
+  await stopChild(run);
+  const scratch = run.scratch;
+  if (!scratch) return true;
+  const target = scratch.created ?? scratch.root;
+  try {
+    if (target && existsSync(target)) {
+      if (!run.source || isWithin(run.source, realpathSync(target))) return false;
+      rmSync(target, { recursive: true, force: true, maxRetries: 2 });
+    }
+    // Nachweis: weder der Klartext-Ordner noch ein angelegtes <workdir> existiert,
+    // und ein vorhandenes <workdir> (beim Start leer) ist wieder leer.
+    if (scratch.root && existsSync(scratch.root)) return false;
+    if (scratch.created) return !existsSync(scratch.created);
+    return !existsSync(scratch.workdir) || readdirSync(scratch.workdir).length === 0;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -227,21 +338,46 @@ function candidateIdentity() {
 }
 
 /**
+ * Ein ganzer Lauf: messen und vergleichen (compare), dann in jedem Fall
+ * aufräumen (cleanup) — erst danach fällt das Urteil.
+ *
  * @param {{ source: string, workdir: string }} args
- * @returns {Promise<{ pass: boolean, lines: string[] }>}
+ * @param {ReturnType<typeof newRun>} [run] Zustand, den main für Signale teilt
+ * @returns {Promise<{ pass: boolean, exitCode: number, lines: string[], errorLines: string[] }>}
+ *   `errorLines` (nur bei interner Ausnahme) gehören wie bisher nach stderr
  */
-export async function verifyCopy({ source: given, workdir }) {
+export async function verifyCopy(args, run = newRun()) {
+  let error = null;
+  try {
+    await compare(args, run);
+  } catch (caught) {
+    if (!(caught instanceof Interrupted)) error = caught;
+  }
+  const cleaned = await cleanup(run);
+  const out = (text) => `PXK-AC3 ${text}`;
+  const tail = [out(`cleanup=${cleaned ? 'verified' : 'FAILED'}`)];
+  if (error && !run.interrupted) {
+    // Nur der Fehlertyp, keine Meldung: sie könnte Werte enthalten.
+    tail.push(out('verdict=FAIL'));
+    return { pass: false, exitCode: cleaned ? 1 : 3, lines: [], errorLines: [out(`error=${error?.code ?? error?.name ?? 'ERROR'}`), ...tail] };
+  }
+  if (run.interrupted) run.failures.push('interrupted');
+  if (!cleaned) run.failures.push('cleanup');
+  const pass = run.failures.length === 0;
+  const lines = [...run.lines];
+  if (run.interrupted) lines.push(out(`interrupted=${run.interrupted}`));
+  lines.push(out(`failures=${pass ? 'none' : run.failures.join(',')}`), ...tail, out(`verdict=${pass ? 'PASS' : 'FAIL'}`));
+  const exitCode = !cleaned ? 3 : run.interrupted ? SIGNAL_EXIT[run.interrupted] : pass ? 0 : 1;
+  return { pass, exitCode, lines, errorLines: [] };
+}
+
+/** Messen und vergleichen; schreibt in run.lines und run.failures. */
+async function compare({ source: given, workdir }, run) {
   const source = realpathSync(given);
-  const lines = [];
-  const out = (text) => lines.push(`PXK-AC3 ${text}`);
-  const failures = [];
+  run.source = source;
+  const out = (text) => run.lines.push(`PXK-AC3 ${text}`);
+  const failures = run.failures;
   const expect = (ok, what) => { if (!ok) failures.push(what); return ok ? 'MATCH' : 'MISMATCH'; };
-  const finish = () => {
-    out(`failures=${failures.length ? failures.join(',') : 'none'}`);
-    out('workdir_plaintext=yes (copy.db, backups) — nach der Auswertung löschen');
-    out(`verdict=${failures.length ? 'FAIL' : 'PASS'}`);
-    return { pass: failures.length === 0, lines };
-  };
 
   const id = candidateIdentity();
   const mem = new Database(':memory:');
@@ -256,23 +392,23 @@ export async function verifyCopy({ source: given, workdir }) {
 
   const sourceBefore = contentFiles(source);
   const key = randomBytes(32);
-  const copy = join(workdir, 'copy.db');
-  const backups = join(workdir, 'backups');
-  mkdirSync(workdir, { recursive: true, mode: 0o700 });
-  chmodSync(workdir, 0o700);
+  const root = createScratch(run, workdir);
+  const copy = join(root, 'copy.db');
+  const backups = join(root, 'backups');
   try {
     await copyOnline(source, copy);
   } catch (error) {
     out(`source readable=no error=${error?.code ?? 'ERROR'}`);
     failures.push('source_unreadable');
-    return finish();
+    return;
   }
+  checkInterrupted(run);
   const before = measure(copy, key, set, refs);
   out(`source readable=yes copy=online-backup copy_integrity=${before.integrity}`);
   expect(before.integrity === 'ok', 'copy_integrity');
   out(`before class=${before.cls} user_version=${before.userVersion} ledger=${before.ledgerCheck} tables=${Object.keys(before.content).length}`);
 
-  const run1 = runCandidate(copy, backups);
+  const run1 = await runCandidate(run, copy, backups);
   const created1 = backupFiles(backups);
   out(`run1 exit=${run1.status} error=${run1.error} head=${run1.head ?? '-'} seeds=${run1.seeds} backups_created=${created1.length} actions=${run1.actions}`);
   expect(run1.status === 0, 'run1_exit');
@@ -312,7 +448,7 @@ export async function verifyCopy({ source: given, workdir }) {
   }
 
   const fileBefore2 = fileHash(copy);
-  const run2 = runCandidate(copy, backups);
+  const run2 = await runCandidate(run, copy, backups);
   const created2 = backupFiles(backups).length - created1.length;
   const after2 = measure(copy, key, set, refs);
   const noop = run2.status === 0 && run2.actions === 'noop' && run2.seeds === '0/0' && created2 === 0;
@@ -320,7 +456,6 @@ export async function verifyCopy({ source: given, workdir }) {
   out(`run2 file_unchanged=${expect(fileHash(copy) === fileBefore2, 'run2_file')} content=${expect(compareContent(after.content, after2.content, []).every(t => t.match), 'run2_content')}`);
 
   out(`source_unchanged=${expect(JSON.stringify(contentFiles(source)) === JSON.stringify(sourceBefore), 'source_changed')}`);
-  return finish();
 }
 
 async function main() {
@@ -333,9 +468,18 @@ async function main() {
     console.error(`PXK-AC3 refused=${error.message}`);
     return 2;
   }
-  const { pass, lines } = await verifyCopy(args);
+  // Ab hier gehört ein Signal dem Prüfstand: Migrationsschritt beenden, löschen, dann Urteil.
+  const run = newRun();
+  const onSignal = (signal) => {
+    if (run.interrupted) return;
+    run.interrupted = signal;
+    stopChild(run);
+  };
+  for (const signal of Object.keys(SIGNAL_EXIT)) process.on(signal, onSignal);
+  const { exitCode, lines, errorLines } = await verifyCopy(args, run);
   for (const line of lines) console.log(line);
-  return pass ? 0 : 1;
+  for (const line of errorLines) console.error(line);
+  return exitCode;
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {

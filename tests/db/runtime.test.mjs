@@ -17,7 +17,7 @@ import { runMigrations } from '../../lib/db/migrate.mjs';
 import { openDatabase } from '../../lib/db/open.mjs';
 import { runSeeds } from '../../lib/db/seed.mjs';
 import { DDL_PATTERN, runAppScript, stringLiterals } from './app-modules.mjs';
-import { MIGRATIONS_DIR, ROOT, buildLegacy, insertSyntheticRows, ledgerRows, tempDir } from './helpers.mjs';
+import { MIGRATIONS_DIR, ROOT, buildLegacy, corruptButStructured, insertSyntheticRows, ledgerRows, tempDir } from './helpers.mjs';
 
 const sha = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
 const sidecars = (path) => ['-wal', '-shm', '-journal'].filter(suffix => existsSync(path + suffix));
@@ -163,14 +163,21 @@ test('App gegen Schemaabweichung (SCHEMA_DRIFT) und veränderte Ledger-Prüfsumm
   assert.deepEqual(snapshot(tampered), tamperedBefore);
 });
 
-test('App gegen beschädigte oder fremde Datei: Fehler, Datei unverändert, kein WAL angelegt', () => {
-  for (const [name, bytes] of [['fremd', Buffer.alloc(4096, 0x5a)], ['nur-kopf', Buffer.concat([Buffer.from('SQLite format 3\0'), Buffer.alloc(84)])]]) {
+test('App gegen beschädigte oder fremde Datei: Fehler, Datei unverändert, kein WAL angelegt — ohne gültigen Kopf gar nicht geöffnet', () => {
+  const files = [
+    ['fremd', Buffer.alloc(4096, 0x5a), /^UNKNOWN_SCHEMA$/],
+    ['nur-kopf', Buffer.concat([Buffer.from('SQLite format 3\0'), Buffer.alloc(84)]), /^UNKNOWN_SCHEMA$/],
+    // formal gültig, erst beim Lesen beschädigt: SQLite selbst meldet den Fehler
+    ['kaputt-innen', corruptButStructured(), /^SQLITE_(NOTADB|CORRUPT)/],
+  ];
+  for (const [name, bytes, code] of files) {
     const path = join(tempDir(), `${name}.db`);
     writeFileSync(path, bytes);
     const before = sha(path);
     const result = ensure(path);
     assert.ok(result.error, `${name}: Fehler erwartet`);
-    assert.match(String(result.error.code), /^SQLITE_(NOTADB|CORRUPT)/, name);
+    assert.match(String(result.error.code), code, name);
+    if (code.test('UNKNOWN_SCHEMA')) assert.match(result.error.message, /keine gültige SQLite-Hauptdatei .*nicht geöffnet/, name);
     assert.equal(sha(path), before, name);
     assert.deepEqual(sidecars(path), [], name);
   }

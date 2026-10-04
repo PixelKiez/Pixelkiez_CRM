@@ -16,7 +16,7 @@ import Database from 'better-sqlite3';
 import { contentDigest, tableColumns } from '../../lib/db/fingerprint.mjs';
 import { openDatabase } from '../../lib/db/open.mjs';
 import { runAppScript } from './app-modules.mjs';
-import { MIGRATIONS_DIR, ROOT, buildLegacy, insertSyntheticRows, ledgerRows, tempDir } from './helpers.mjs';
+import { MIGRATIONS_DIR, ROOT, buildLegacy, corruptButStructured, insertSyntheticRows, ledgerRows, tempDir } from './helpers.mjs';
 
 const START = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).scripts.start;
 const sha = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -154,11 +154,14 @@ test('umsortierte Migrationen → Start verweigert (RENAMED_OR_REORDERED, Exit 1
 });
 
 test('beschädigte oder fremde Datei → UNKNOWN_SCHEMA (Exit 12) mit klarem Grund statt internem Fehler; Datei unverändert, App startet nicht', () => {
+  // ohne gültigen Kopf wird gar nicht geöffnet; formal gültig, aber innen beschädigt meldet SQLite selbst
+  const refused = /^PXK-DB \[UNKNOWN_SCHEMA\] .*: keine gültige SQLite-Hauptdatei \(.+\) — nicht geöffnet/m;
   const files = {
-    fremd: Buffer.alloc(4096, 0x5a),
-    'nur-kopf': Buffer.concat([Buffer.from('SQLite format 3\0'), Buffer.from([0x10, 0x00, 0x02, 0x02]), Buffer.alloc(80)]),
+    fremd: [Buffer.alloc(4096, 0x5a), refused],
+    'nur-kopf': [Buffer.concat([Buffer.from('SQLite format 3\0'), Buffer.from([0x10, 0x00, 0x02, 0x02]), Buffer.alloc(80)]), refused],
+    'kaputt-innen': [corruptButStructured(), /^PXK-DB \[UNKNOWN_SCHEMA\] .*: keine lesbare SQLite-Datenbank \(SQLITE_(NOTADB|CORRUPT)/m],
   };
-  for (const [name, bytes] of Object.entries(files)) {
+  for (const [name, [bytes, reason]] of Object.entries(files)) {
     for (const production of [false, true]) {
       const dir = project();
       const path = join(dir, `${name}.db`);
@@ -167,7 +170,7 @@ test('beschädigte oder fremde Datei → UNKNOWN_SCHEMA (Exit 12) mit klarem Gru
       const result = npmStart(dir, env);
       const label = `${name} ${production ? 'Produktion' : 'Entwicklung'}`;
       assert.equal(result.status, 12, `${label}: ${result.stderr}`);
-      assert.match(result.stderr, /^PXK-DB \[UNKNOWN_SCHEMA\] .*: keine lesbare SQLite-Datenbank \(SQLITE_(NOTADB|CORRUPT)/m, label);
+      assert.match(result.stderr, reason, label);
       assert.doesNotMatch(result.stderr, /INTERNAL|\n\s+at /, `${label}: kein Stacktrace`);
       assert.equal(result.started, false, label);
       assert.equal(sha(path), createHash('sha256').update(bytes).digest('hex'), `${label}: Datei unverändert`);

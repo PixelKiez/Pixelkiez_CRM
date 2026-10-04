@@ -36,7 +36,9 @@ export function verifyMigrated(db: Database.Database) {
  * leere oder nicht migrierte Datei wird so nie angelegt oder beschrieben — auch
  * nicht durch den Header, den das Umschalten auf WAL in eine leere Datei schreibt.
  * Eine leere Datei wird gar nicht erst geöffnet: SQLite verwirft beim Öffnen
- * (auch schreibgeschützt) ein daneben liegendes -wal. Scheitert die Prüfung,
+ * (auch schreibgeschützt) ein daneben liegendes -wal. Eine ungültige oder
+ * abgeschnittene Hauptdatei und eine nicht unterstützte Node-Laufzeit weist
+ * openDatabase vor jedem Öffnen ab (lib/db/open.mjs). Scheitert die Prüfung,
  * bleibt keine Verbindung zurück; der nächste Zugriff prüft erneut.
  */
 export function getSqlite(): Database.Database {

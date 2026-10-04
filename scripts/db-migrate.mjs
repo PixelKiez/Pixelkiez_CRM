@@ -22,7 +22,11 @@
  * gelesen; echte Umgebungsvariablen haben Vorrang.
  * Produktion: siehe lib/db/environment.mjs (NODE_ENV oder
  * RAILWAY_ENVIRONMENT_NAME = production; im Zweifel Produktion).
+ * Laufzeit: Node >=22.14.0 <23 mit Node-API >= 10 (lib/db/runtime.mjs); sonst
+ * Exit 17, bevor better-sqlite3 geladen wird.
  */
+// Muss der erste Import bleiben: bricht auf nicht unterstützter Node-Laufzeit ab, bevor better-sqlite3 lädt.
+import '../lib/db/runtime-gate.mjs';
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, rmdirSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
@@ -32,7 +36,7 @@ import { EXIT_CODES, MigrationError } from '../lib/db/errors.mjs';
 import { contentDigest } from '../lib/db/fingerprint.mjs';
 import { defaultMigrationsDir, runMigrations } from '../lib/db/migrate.mjs';
 import { classifyEnvironment } from '../lib/db/environment.mjs';
-import { openDatabase, resolveDbPath } from '../lib/db/open.mjs';
+import { assertOpenable, openDatabase, openProblem, resolveDbPath } from '../lib/db/open.mjs';
 import { buildReport } from '../lib/db/report.mjs';
 import { planSeeds, readSeedLeads, runSeeds, seedWriteGate } from '../lib/db/seed.mjs';
 
@@ -94,12 +98,14 @@ async function main() {
   }
 
   if (args.report || args.check) {
-    // Auch der lesende Bericht öffnet eine verwaiste -wal-Lage nie (SQLite verwürfe das -wal).
-    if (orphanedWal(dbPath)) {
+    // Auch der lesende Bericht öffnet nie eine Datei, bei der SQLite das -wal
+    // verwürfe oder ein -shm anlegte (ungültige Hauptdatei, verwaistes -wal).
+    const unsafe = openProblem(dbPath);
+    if (unsafe.verdict) {
       console.log(`PXK-DB report mode=${mode}`);
       console.log(`PXK-DB report sqlite_path=${pathSource} ${dbPath}`);
-      console.log(`PXK-DB report file=${orphanedWal.describe(dbPath)} — nicht geöffnet`);
-      console.log('PXK-DB report verdict=orphaned-wal');
+      console.log(`PXK-DB report file=${unsafe.detail} — nicht geöffnet`);
+      console.log(`PXK-DB report verdict=${unsafe.verdict}`);
       return args.report ? 0 : EXIT_CODES.UNKNOWN_SCHEMA;
     }
     const report = buildReport({ dbPath, migrationsDir, mode, modeReason, pathSource });
@@ -116,11 +122,10 @@ async function main() {
   console.log(`PXK-DB runtime node=${process.version}`);
   console.log(`PXK-DB mode=${mode} sqlite_path=${pathSource} ${dbPath} mode_reason=${modeReason}`);
   const allowFresh = env.PXK_DB_ALLOW_FRESH === '1';
-  // Leere Hauptdatei, aber Daten im -wal: eine unvollständige Kopie oder
-  // Wiederherstellung. SQLite verwirft dieses -wal schon beim Öffnen — also nie öffnen.
-  if (orphanedWal(dbPath)) {
-    throw new MigrationError('UNKNOWN_SCHEMA', dbPath, `${orphanedWal.describe(dbPath)} (unvollständige Kopie oder Wiederherstellung?) — nichts geöffnet, nichts geschrieben`);
-  }
+  // Ungültige Hauptdatei (z. B. abgeschnitten) oder fehlende/leere Hauptdatei mit
+  // Daten im -wal: eine unvollständige Kopie oder Wiederherstellung. SQLite
+  // veränderte -wal und Hauptdatei schon beim Öffnen — also nie öffnen (lib/db/open.mjs).
+  assertOpenable(dbPath);
   // Fehlt die Datei in Produktion, wird sie gar nicht erst angelegt.
   if (production && !allowFresh && (!existsSync(dbPath) || statSync(dbPath).size === 0)) {
     throw new MigrationError(
@@ -253,17 +258,6 @@ function publish(info, dir) {
 }
 
 const backupLine = (info) => `PXK-DB Sicherung ${info.path} sha256=${info.sha256} bytes=${info.bytes}`;
-
-/**
- * Hauptdatei fehlt oder ist leer, daneben liegt ein nicht leeres -wal: SQLite
- * würde dieses -wal beim Öffnen (auch schreibgeschützt) verwerfen. Gilt für
- * Migration und Bericht gleichermaßen — eine solche Lage wird nie geöffnet.
- */
-function orphanedWal(path) {
-  const size = (p) => (existsSync(p) ? statSync(p).size : -1);
-  return size(path) <= 0 && size(`${path}-wal`) > 0;
-}
-orphanedWal.describe = (path) => `Hauptdatei ${existsSync(path) ? 'ist leer' : 'fehlt'}, daneben liegt ein nicht leeres -wal`;
 
 /**
  * Eine beschädigte oder fremde Datei meldet SQLite erst beim ersten Zugriff.

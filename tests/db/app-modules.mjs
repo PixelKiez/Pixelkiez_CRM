@@ -3,7 +3,7 @@
  * und ohne Loader-Hooks. Die .ts-Dateien werden mit dem typescript-Paket in ein
  * Temp-Verzeichnis übersetzt und ihre Importe auf absolute file:-URLs
  * umgeschrieben. Das läuft auf jeder Node-Version des Engine-Bereichs
- * (>= 22.13); module.registerHooks gibt es erst ab Node 22.15.
+ * (>= 22.14); module.registerHooks gibt es erst ab Node 22.15.
  *
  * Jeder Aufruf von runAppScript startet einen eigenen Prozess: Modulzustand
  * (gecachte Verbindung) und Umgebung (SQLITE_PATH, Arbeitsverzeichnis) sind so

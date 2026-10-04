@@ -79,3 +79,21 @@ export async function errorCode(fn) {
   }
   return null;
 }
+
+/**
+ * Formal gültige Datei (vollständiger Kopf, ganze Seite) — der Kopf verspricht
+ * aber zwei Seiten: Die Vorprüfung vor dem Öffnen (lib/db/open.mjs) lässt sie
+ * durch, SQLite meldet erst beim Lesen SQLITE_CORRUPT. Mit `wal` im WAL-Format
+ * (Bytes 18/19 = 2): SQLite legt dann -wal/-shm an, bevor es scheitert.
+ */
+export function corruptButStructured({ wal = false } = {}) {
+  const page = Buffer.alloc(4096);
+  Buffer.from('SQLite format 3\0', 'latin1').copy(page);
+  page.writeUInt16BE(4096, 16);
+  page[18] = page[19] = wal ? 2 : 1;
+  page[21] = 64; page[22] = 32; page[23] = 32;
+  page.writeUInt32BE(1, 24); // Änderungszähler
+  page.writeUInt32BE(2, 28); // Seitenzahl laut Kopf (die Datei hat eine)
+  page.writeUInt32BE(1, 92); // Kopf gilt für Änderungszähler 1
+  return page;
+}

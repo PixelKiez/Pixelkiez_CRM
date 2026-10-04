@@ -15,123 +15,16 @@
  * Stand — beides wie in der späteren Verifier-Sitzung.
  */
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../../lib/db/migrate.mjs';
 import { openDatabase } from '../../lib/db/open.mjs';
-import { runSeeds } from '../../lib/db/seed.mjs';
 import { compareContent, tableContent } from '../../scripts/db-verify-copy.mjs';
-import { MIGRATIONS_DIR, ROOT, buildLegacy, insertSyntheticRows, tempDir } from './helpers.mjs';
-
-const hasGit = spawnSync('git', ['--version']).status === 0;
-const skip = !hasGit && 'git fehlt';
-const sha = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
-
-const SENTINELS = ['SENTINEL-NAME-4b1f', 'SENTINEL-TOKEN-91ac', 'SENTINEL-PHONE-0301234567', 'SENTINEL-NOTE-77de', 'sentinel@example.invalid', 'Grüße', 'ünïcödé'];
-
-/** Produktionsähnliche Quelle: Altstand, Seeds vollständig, gemischte Speicherklassen, auf Wunsch Daten nur im WAL. */
-function source({ variant = 'S5', missingTemplate = null, walRows = 0 } = {}) {
-  const dir = tempDir();
-  const path = join(dir, 'quelle.db');
-  const db = buildLegacy(path, variant);
-  runSeeds(db);
-  insertSyntheticRows(db, 4);
-  const now = '2026-10-04T00:00:00.000Z';
-  db.exec(`INSERT INTO settings (key, value) VALUES
-    ('blob', x'00ff10'), ('ungueltiges-utf8', CAST(x'ff00fe' AS TEXT)), ('real', 0.30000000000000004),
-    ('gross', 9007199254740993), ('leer', NULL), ('text-1', '1'), ('int-1', 1), ('unicode', 'Grüße ünïcödé 🌍')`);
-  db.prepare("UPDATE leads SET phone = 'SENTINEL-PHONE-0301234567', notes = 'SENTINEL-NOTE-77de' WHERE rowid IN (SELECT rowid FROM leads ORDER BY rowid LIMIT 5)").run();
-  if (variant === 'S5') {
-    db.prepare('INSERT INTO users (email, display_name, google_tokens, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
-      .run('sentinel@example.invalid', 'SENTINEL-NAME-4b1f', '{"refresh_token":"SENTINEL-TOKEN-91ac"}', now, now);
-  }
-  if (missingTemplate) db.prepare('DELETE FROM email_templates WHERE slug = ?').run(missingTemplate);
-  db.close();
-  if (walRows) {
-    // wie in Produktion: aktuelle Daten nur im -wal, die Hauptdatei allein ist veraltet
-    const writer = spawnSync(process.execPath, ['--input-type=module', '-e', `
-      import Database from 'better-sqlite3';
-      const db = new Database(${JSON.stringify(path)});
-      db.pragma('wal_autocheckpoint = 0');
-      db.exec("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ${walRows}) INSERT INTO leads (id, name, updated_at) SELECT 'WAL-' || i, 'nur im WAL ' || i, '${now}' FROM n");
-      process.kill(process.pid, 'SIGKILL');
-    `], { cwd: ROOT, encoding: 'utf8' });
-    assert.equal(writer.signal, 'SIGKILL', writer.stderr);
-  }
-  return { dir, path };
-}
-
-/** Saubere Git-Kopie des Kandidaten, aus der der Prüfstand läuft (mit `git: false` ohne Repository). */
-function isolatedProject({ git: withGit = true } = {}) {
-  const dir = tempDir();
-  for (const part of ['scripts', 'lib', 'db']) cpSync(join(ROOT, part), join(dir, part), { recursive: true });
-  symlinkSync(join(ROOT, 'node_modules'), join(dir, 'node_modules'));
-  writeFileSync(join(dir, '.gitignore'), '/node_modules\n');
-  if (!withGit) return dir;
-  gitIn(dir, 'init', '-q');
-  gitIn(dir, 'add', '-A');
-  gitIn(dir, 'commit', '-q', '-m', 'Kandidat');
-  return dir;
-}
-
-/** git ohne GIT_*-Variablen der Umgebung (z. B. aus einem Hook) und ohne Nutzer-/Systemkonfiguration. */
-function gitIn(dir, ...args) {
-  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
-  const result = spawnSync('git', ['-C', dir, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], {
-    encoding: 'utf8',
-    env: { ...env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
-  });
-  assert.equal(result.status, 0, result.stderr);
-}
-let shared = null;
-const project = () => (shared ??= isolatedProject());
-
-function harness(args, env = {}, dir = project()) {
-  const result = spawnSync(process.execPath, [join(dir, 'scripts', 'db-verify-copy.mjs'), ...args], {
-    cwd: tempDir(),
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env },
-    encoding: 'utf8',
-  });
-  const lines = result.stdout.split('\n').filter(Boolean);
-  const value = (prefix) => lines.find(l => l.startsWith(`PXK-AC3 ${prefix}`));
-  return { ...result, lines, value };
-}
-const verify = (path, dir) => harness([`--source=${path}`, `--workdir=${join(tempDir(), 'arbeit')}`], {}, dir);
-
-const ALLOWED = [
-  /^PXK-AC3 candidate=([0-9a-f]{40}|[0-9a-f]{64}|unknown) clean=(yes|NO|unknown) node=v\d+\.\d+\.\d+ sqlite=\d+\.\d+\.\d+$/,
-  /^PXK-AC3 migrations=\d+ last=\d{4}_[a-z0-9_]+$/,
-  /^PXK-AC3 source readable=(yes copy=online-backup copy_integrity=(ok|FAILED)|no error=[A-Z_]+)$/,
-  /^PXK-AC3 before class=[A-Z_]+( S[1-5])? user_version=\d+ ledger=[A-Za-z_]+ tables=\d+$/,
-  /^PXK-AC3 run1 exit=\d+ error=[-A-Z_0-9]+ head=[-\d]+ seeds=(-|\d+\/\d+) backups_created=\d+ actions=[a-z0-9_ ,()S-]+$/,
-  /^PXK-AC3 after class=[A-Z_]+( S[1-5])? user_version=\d+ ledger_check=[A-Za-z_]+ integrity=(ok|FAILED)$/,
-  /^PXK-AC3 ledger rows=\d+ (-|(\d+:\d{4}_[a-z0-9_]+:(applied|baselined):(S[1-5]|-) ?)+) ?expected=(MATCH|MISMATCH)$/,
-  /^PXK-AC3 schema after_vs_canonical=(MATCH|MISMATCH) before_vs_after=(MATCH|CHANGED)$/,
-  /^PXK-AC3 table=([A-Za-z0-9_]+|#\d+) rows_before=(-|\d+) rows_after=(-|\d+) content=(MATCH|MISMATCH)$/,
-  /^PXK-AC3 changed_tables=\d+$/,
-  /^PXK-AC3 backup_vs_before=(MATCH|MISMATCH|MISSING|none-required)$/,
-  /^PXK-AC3 run2 exit=\d+ error=[-A-Z_0-9]+ actions=[a-z0-9_ ,()S-]+ seeds=(-|\d+\/\d+) backups_created=-?\d+ noop=(MATCH|MISMATCH)$/,
-  /^PXK-AC3 run2 file_unchanged=(MATCH|MISMATCH) content=(MATCH|MISMATCH)$/,
-  /^PXK-AC3 source_unchanged=(MATCH|MISMATCH)$/,
-  /^PXK-AC3 failures=[a-z0-9_,]+$/,
-  /^PXK-AC3 workdir_plaintext=yes \(copy\.db, backups\) — nach der Auswertung löschen$/,
-  /^PXK-AC3 verdict=(PASS|FAIL)$/,
-];
-
-/** Nur erlaubte Zeilen; keine Werte, keine Prüfsummen (außer der Kandidaten-SHA). */
-function assertPrivate(result, extraSentinels = []) {
-  const all = `${result.stdout}${result.stderr}`;
-  for (const line of result.lines) assert.ok(ALLOWED.some(re => re.test(line)), `nicht erlaubte Zeile: ${line}`);
-  assert.equal(result.stderr, '', 'keine Ausgabe auf stderr');
-  for (const sentinel of [...SENTINELS, ...extraSentinels]) assert.equal(all.includes(sentinel), false, `Wert in der Ausgabe: ${sentinel}`);
-  const withoutCandidate = result.lines.filter(l => !l.startsWith('PXK-AC3 candidate=')).join('\n');
-  assert.doesNotMatch(withoutCandidate, /[0-9a-fA-F]{16,}/, 'keine Prüfsummen oder Hex-Inhalte');
-  assert.doesNotMatch(all, /\/(private|var|tmp|Users|home)\//, 'keine Pfade');
-}
+import { assertPrivate, gitIn, harness, isolatedProject, sha, skip, source, verify } from './ac3-helpers.mjs';
+import { MIGRATIONS_DIR, corruptButStructured, tempDir } from './helpers.mjs';
 
 test('AC3-Probe (synthetisch): produktionsähnliche S5-Kopie mit Daten nur im WAL → PASS, Geschäftsdaten gleich, Metadaten getrennt, zweiter Lauf No-op, Quelle unverändert', { skip }, () => {
   const { dir, path } = source({ walRows: 120 });
@@ -159,6 +52,7 @@ test('AC3-Probe (synthetisch): produktionsähnliche S5-Kopie mit Daten nur im WA
   assert.match(result.value('run2 exit'), /actions=noop seeds=0\/0 backups_created=0 noop=MATCH$/);
   assert.equal(result.value('run2 file'), 'PXK-AC3 run2 file_unchanged=MATCH content=MATCH');
   assert.equal(result.value('source_unchanged='), 'PXK-AC3 source_unchanged=MATCH');
+  assert.equal(result.value('cleanup='), 'PXK-AC3 cleanup=verified');
   assertPrivate(result);
   // Quelle samt vorhandener WAL-Dateien bytegleich, keine neuen Nebendateien
   assert.deepEqual(readdirSync(dir).sort(), sidecarsBefore);
@@ -197,14 +91,19 @@ test('AC3-Probe: Kandidat verweigert (älterer Altstand S3 ohne Freigabe) → FA
   assertPrivate(result);
 });
 
-test('AC3-Probe: beschädigte Quelle → FAIL (source readable=no), nichts weiter ausgeführt', { skip }, () => {
+test('AC3-Probe: beschädigte Quelle → FAIL (source readable=no), nichts weiter ausgeführt; ohne SQLite-Kopf gar nicht geöffnet (Exit 2)', { skip }, () => {
   const path = join(tempDir(), 'kaputt.db');
-  writeFileSync(path, Buffer.alloc(8192, 0x41));
+  writeFileSync(path, corruptButStructured());
   const result = verify(path);
   assert.equal(result.status, 1);
-  assert.match(result.value('source readable='), /^PXK-AC3 source readable=no error=SQLITE_NOTADB$/);
+  assert.match(result.value('source readable='), /^PXK-AC3 source readable=no error=SQLITE_CORRUPT$/);
   assert.equal(result.value('run1 '), undefined);
+  assert.equal(result.value('cleanup='), 'PXK-AC3 cleanup=verified');
   assertPrivate(result);
+  writeFileSync(path, Buffer.alloc(8192, 0x41));
+  const refused = verify(path);
+  assert.equal(refused.status, 2);
+  assert.match(refused.stderr, /^PXK-AC3 refused=Quelle ist keine gültige SQLite-Datei \(kein SQLite-Dateikopf\)/);
 });
 
 test('AC3-Probe läuft im Produktionsmodus: leere, aber gültige SQLite-Quelle → FRESH_DB_IN_PRODUCTION, FAIL', { skip }, () => {
@@ -261,8 +160,8 @@ test('AC3-Probe ist an den Kandidaten gebunden: unversionierte Datei oder kein G
 test('AC3-Probe: scheitert die Kopie einer WAL-Quelle, werden die vom Lesen angelegten Nebendateien trotzdem entfernt', { skip }, () => {
   const dir = tempDir();
   const path = join(dir, 'kopf.db');
-  // nur der 100-Byte-Kopf einer WAL-Datenbank (Bytes 18/19 = 2): SQLite legt -wal/-shm an und scheitert dann
-  writeFileSync(path, Buffer.concat([Buffer.from('SQLite format 3\0'), Buffer.from([0x10, 0x00, 0x02, 0x02]), Buffer.alloc(80)]));
+  // formal gültige WAL-Datenbank (Bytes 18/19 = 2): SQLite legt -wal/-shm an und scheitert dann
+  writeFileSync(path, corruptButStructured({ wal: true }));
   const result = verify(path);
   assert.equal(result.status, 1);
   assert.match(result.value('source readable='), /^PXK-AC3 source readable=no error=SQLITE_(NOTADB|CORRUPT)$/);
@@ -282,15 +181,16 @@ test('AC3-Probe: ein Tabellenname mit Zeilenumbruch kann keine Ergebniszeile ein
   assertPrivate(result);
 });
 
-test('AC3-Probe schützt die Klartext-Kopie: vorhandener Arbeitsordner wird 0700, copy.db 0600', { skip }, () => {
+test('AC3-Probe schützt die Klartext-Kopie: vorhandener Arbeitsordner wird 0700 und bleibt danach leer zurück (copy.db 0600 siehe verify-copy-cleanup)', { skip }, () => {
   const { path } = source();
   const work = join(tempDir(), 'vorhanden');
   mkdirSync(work);
   chmodSync(work, 0o755);
   const result = harness([`--source=${path}`, `--workdir=${work}`]);
   assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(result.value('cleanup='), 'PXK-AC3 cleanup=verified');
   assert.equal(statSync(work).mode & 0o777, 0o700);
-  assert.equal(statSync(join(work, 'copy.db')).mode & 0o777, 0o600);
+  assert.deepEqual(readdirSync(work), [], 'Klartext gelöscht, Ordner des Aufrufers bleibt');
 });
 
 test('AC3-Probe öffnet nie eine leere Quelle mit -wal daneben (Exit 2) — das -wal bleibt bytegleich', { skip }, () => {
