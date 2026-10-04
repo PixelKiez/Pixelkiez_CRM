@@ -2,7 +2,7 @@
  * In-Memory-Mock des CRM-Backends für die lokale Vorschau ohne Server.
  * Ersetzt window.fetch und simuliert alle API-Routen gegen die Seed-Daten.
  */
-import seedLeads from '../data/leads.json';
+import seedLeads from '../db/seeds/leads.json';
 
 type Lead = Record<string, unknown> & { id: string };
 

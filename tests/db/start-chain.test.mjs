@@ -9,9 +9,10 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import Database from 'better-sqlite3';
 import { contentDigest, tableColumns } from '../../lib/db/fingerprint.mjs';
 import { openDatabase } from '../../lib/db/open.mjs';
 import { runAppScript } from './app-modules.mjs';
@@ -94,9 +95,10 @@ test('AC4 Ende-zu-Ende in Produktion: defekte Migration → Rollback, Exit 13, A
   legacy.prepare("INSERT INTO leads (id, name, updated_at) VALUES ('PK-D1', 'Doppelt', '2026-10-04T00:00:00.000Z'), ('PK-D2', 'Doppelt', '2026-10-04T00:00:00.000Z')").run();
   legacy.close();
   const before = business(path);
-  const env = { SQLITE_PATH: path, RAILWAY_ENVIRONMENT_NAME: 'production', PXK_DB_BACKUP_DIR: join(tempDir(), 'backups') };
+  const backups = join(tempDir(), 'backups');
+  const env = { SQLITE_PATH: path, RAILWAY_ENVIRONMENT_NAME: 'production', PXK_DB_BACKUP_DIR: backups };
 
-  for (const attempt of ['Start', 'Neustart']) {
+  for (const [index, attempt] of ['Start', 'Neustart'].entries()) {
     const result = npmStart(dir, env);
     assert.equal(result.status, 13, `${attempt}: ${result.stderr}`);
     assert.match(result.stderr, /PXK-DB \[MIGRATION_FAILED\] 0002_unique_name: Anweisung 2: UNIQUE constraint failed/, attempt);
@@ -104,6 +106,13 @@ test('AC4 Ende-zu-Ende in Produktion: defekte Migration → Rollback, Exit 13, A
     // Je Migration eine Transaktion: die Übernahme der Baseline bleibt, 0002 ist vollständig zurückgerollt.
     assert.deepEqual(versions(path), ['1 0001_baseline baselined S5'], attempt);
     assert.deepEqual(business(path), before, `${attempt}: keine Spalte district, Geschäftsdaten unverändert`);
+    // Die geprüfte Sicherung jedes Versuchs liegt abgelegt im Ziel — obwohl die Migration danach scheiterte.
+    const published = readdirSync(backups).filter(f => /^pre-.*\.db$/.test(f)).sort();
+    assert.equal(published.length, index + 1, `${attempt}: ${published.join(', ')}`);
+    assert.deepEqual(readdirSync(backups).filter(f => f.startsWith('.partial-')), [], `${attempt}: kein Arbeitsordner bleibt`);
+    const newest = published.find(f => f.startsWith(index === 0 ? 'pre-0001_baseline-' : 'pre-0002_unique_name-'));
+    assert.ok(newest, `${attempt}: ${published.join(', ')}`);
+    assert.deepEqual(business(join(backups, newest)), before, `${attempt}: Sicherung = Stand davor`);
   }
   const bypass = runAppScript({ cwd: dir, env: { SQLITE_PATH: path }, body: 'await app.ensureDatabase(); return true;' });
   assert.equal(bypass.error?.code, 'MIGRATIONS_PENDING', 'auch next start ohne Migrationsschritt bedient keine Anfrage');
@@ -176,5 +185,74 @@ test('D7: Node-Version als erste Zeile des Starts, keine Werte aus der Umgebung'
   assert.equal(result.stdout.split('\n')[0], `PXK-DB runtime node=${process.version}`);
   for (const value of Object.values(secrets)) {
     assert.equal(`${result.stdout}${result.stderr}`.includes(value), false, 'kein Geheimnis in der Ausgabe');
+  }
+});
+
+test('leere Hauptdatei mit nicht leerem -wal (unvollständige Kopie) → UNKNOWN_SCHEMA (Exit 12) ohne Öffnen; das -wal bleibt, App startet nicht', () => {
+  for (const env of [{}, { NODE_ENV: 'production', PXK_DB_ALLOW_FRESH: '1', PXK_DB_BACKUP_DIR: join(tempDir(), 'b') }]) {
+    const dir = project();
+    const path = join(dir, 'crm.db');
+    const writer = new Database(join(dir, 'schreiber.db'));
+    writer.pragma('journal_mode = WAL');
+    writer.pragma('wal_autocheckpoint = 0');
+    writer.exec("CREATE TABLE t (a); INSERT INTO t VALUES ('nur im WAL')");
+    copyFileSync(join(dir, 'schreiber.db-wal'), `${path}-wal`);
+    writer.close();
+    writeFileSync(path, '');
+    const wal = sha(`${path}-wal`);
+    const result = npmStart(dir, { SQLITE_PATH: path, ...env });
+    const label = env.NODE_ENV ?? 'development';
+    assert.equal(result.status, 12, `${label}: ${result.stderr}`);
+    assert.match(result.stderr, /\[UNKNOWN_SCHEMA\] .*Hauptdatei ist leer, daneben liegt ein nicht leeres -wal/, label);
+    assert.equal(result.started, false, label);
+    assert.equal(sha(`${path}-wal`), wal, `${label}: -wal unverändert`);
+    assert.equal(readFileSync(path).length, 0, `${label}: Hauptdatei unverändert`);
+  }
+});
+
+/** Nicht leeres -wal neben fehlender oder leerer Hauptdatei (unvollständige Kopie oder Wiederherstellung). */
+function orphanedWal(dir, path, { mainFile }) {
+  const writer = new Database(join(dir, 'schreiber.db'));
+  writer.pragma('journal_mode = WAL');
+  writer.pragma('wal_autocheckpoint = 0');
+  writer.exec("CREATE TABLE t (a); INSERT INTO t VALUES ('nur im WAL')");
+  copyFileSync(join(dir, 'schreiber.db-wal'), `${path}-wal`);
+  writer.close();
+  if (mainFile) writeFileSync(path, '');
+  return sha(`${path}-wal`);
+}
+
+test('fehlende Hauptdatei mit nicht leerem -wal → UNKNOWN_SCHEMA (Exit 12) ohne Anlegen; das -wal bleibt — auch mit PXK_DB_ALLOW_FRESH=1', () => {
+  for (const env of [{}, { NODE_ENV: 'production', PXK_DB_ALLOW_FRESH: '1', PXK_DB_BACKUP_DIR: join(tempDir(), 'b') }]) {
+    const dir = project();
+    const path = join(dir, 'crm.db');
+    const wal = orphanedWal(dir, path, { mainFile: false });
+    const result = npmStart(dir, { SQLITE_PATH: path, ...env });
+    const label = env.NODE_ENV ?? 'development';
+    assert.equal(result.status, 12, `${label}: ${result.stderr}`);
+    assert.match(result.stderr, /\[UNKNOWN_SCHEMA\] .*Hauptdatei fehlt, daneben liegt ein nicht leeres -wal/, label);
+    assert.equal(result.started, false, label);
+    assert.equal(existsSync(path), false, `${label}: keine Hauptdatei angelegt`);
+    assert.equal(sha(`${path}-wal`), wal, `${label}: -wal unverändert`);
+  }
+});
+
+test('--report und --check öffnen eine verwaiste -wal-Lage nie: Bericht ohne Öffnen, --check mit Exit 12, das -wal bleibt', () => {
+  for (const mainFile of [true, false]) {
+    const dir = project();
+    const path = join(dir, 'crm.db');
+    const wal = orphanedWal(dir, path, { mainFile });
+    for (const [flag, status] of [['--report', 0], ['--check', 12]]) {
+      const result = spawnSync(process.execPath, ['scripts/db-migrate.mjs', flag], {
+        cwd: dir,
+        env: { PATH: process.env.PATH, HOME: process.env.HOME, SQLITE_PATH: path },
+        encoding: 'utf8',
+      });
+      const label = `${flag} ${mainFile ? 'leer' : 'fehlt'}`;
+      assert.equal(result.status, status, `${label}: ${result.stderr}`);
+      assert.match(result.stdout, /PXK-DB report verdict=orphaned-wal/, label);
+      assert.equal(sha(`${path}-wal`), wal, `${label}: -wal unverändert`);
+      assert.equal(existsSync(path), mainFile, `${label}: Hauptdatei weder angelegt noch entfernt`);
+    }
   }
 });

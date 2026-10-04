@@ -70,20 +70,21 @@ test('Lead-Seed nur bei leerer Tabelle', async () => {
   db.close();
 });
 
-test('fehlende Lead-Quelle ist nur bei leerer Tabelle ein Fehler (SEED_SOURCE_MISSING)', async () => {
+test('fehlende Lead-Quelle ist nur bei leerer Tabelle ein Fehler (SEED_SOURCE_MISSING) — gelesen wird vor jedem Schreibzugriff', async () => {
   const db = await migrated();
   const missing = join(tempDir(), 'fehlt.json');
   const error = await errorCode(() => runSeeds(db, { leadsJson: missing }));
   assert.equal(error?.code, 'SEED_SOURCE_MISSING');
   assert.equal(db.prepare('SELECT count(*) AS c FROM leads').get().c, 0);
+  assert.equal(db.prepare('SELECT count(*) AS c FROM email_templates').get().c, 0, 'auch keine Vorlagen: der Lauf scheitert, bevor er schreibt');
   db.prepare("INSERT INTO leads (id, name, updated_at) VALUES ('PK-T1', 'Testfirma', '2026-10-02T00:00:00.000Z')").run();
-  assert.deepEqual(runSeeds(db, { leadsJson: missing }), { templatesInserted: 0, leadsInserted: 0 });
+  assert.deepEqual(runSeeds(db, { leadsJson: missing }), { templatesInserted: 8, leadsInserted: 0 });
   db.close();
 });
 
 test('Lead-Seed scheitert mittendrin (doppelte id an Position 501) → SEED_FAILED, 0 Leads', async () => {
   const db = await migrated();
-  const leads = JSON.parse(readFileSync(join(ROOT, 'data/leads.json'), 'utf8'));
+  const leads = JSON.parse(readFileSync(join(ROOT, 'db/seeds/leads.json'), 'utf8'));
   const broken = [...leads.slice(0, 500), leads[0], ...leads.slice(500)];
   const path = join(tempDir(), 'leads-kaputt.json');
   writeFileSync(path, JSON.stringify(broken));
