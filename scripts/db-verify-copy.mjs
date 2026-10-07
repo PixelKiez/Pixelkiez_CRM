@@ -41,7 +41,9 @@
  * SIGHUP; ein laufender Migrationsschritt wird vorher beendet. Ein vom
  * Prüfstand angelegtes <workdir> verschwindet mit, ein vorhandenes leeres
  * bleibt leer zurück; die Quelle wird nie gelöscht. Das Urteil fällt erst nach
- * nachgewiesenem Löschen (cleanup=verified). Abgefangen werden SIGHUP, SIGINT,
+ * nachgewiesenem Löschen (cleanup=verified): lstat meldet ENOENT, und Ordner und
+ * Elternordner sind dieselben wie beim Anlegen (Gerät/Inode) — ein unerreichbarer
+ * oder umbenannter Ordner zählt nie als gelöscht (Exit 3). Abgefangen werden SIGHUP, SIGINT,
  * SIGQUIT und SIGTERM; SIGKILL (und seltene Signale wie SIGUSR2) gegen den
  * Prüfstand hinterlassen ac3-XXXXXX — <workdir> daher nie in synchronisierten Ordnern.
  *
@@ -54,13 +56,14 @@ import '../lib/db/runtime-gate.mjs';
 import Database from 'better-sqlite3';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { closeSync, existsSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { classifyEnvironment } from '../lib/db/environment.mjs';
 import { LEDGER_TABLE, fingerprint, sameFingerprint } from '../lib/db/fingerprint.mjs';
 import { checkLedger, classify, createReferences, loadMigrations } from '../lib/db/migrate.mjs';
 import { assertOpenable, openProblem } from '../lib/db/open.mjs';
+import { createScratch, removeScratch } from './db-verify-copy-scratch.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = join(ROOT, 'scripts', 'db-migrate.mjs');
@@ -94,7 +97,7 @@ export function checkIsolation({ source, workdir }, env = process.env) {
   // liegendes -wal oder legt ein -shm an — solche Quellen werden nie geöffnet (lib/db/open.mjs).
   const file = openProblem(source);
   if (file.main.state === 'empty') throw new Refusal('Quelle ist leer — nie öffnen, ein -wal daneben ginge verloren');
-  if (file.verdict) throw new Refusal(`Quelle ist keine gültige SQLite-Datei (${file.main.reason ?? file.verdict}) — nicht geöffnet, -wal/-shm unberührt`);
+  if (file.verdict) throw new Refusal(`Quelle ist keine gültige SQLite-Datei (${file.main.reason ?? file.detail ?? file.verdict}) — nicht geöffnet, -wal/-shm unberührt; vor jedem Blick mit SQLite alle drei Dateien kopieren`);
   if (existsSync(workdir) && !statSync(workdir).isDirectory()) throw new Refusal('Arbeitsordner ist kein Ordner');
   // Leer heißt auch: die Quelle liegt nicht darin.
   if (existsSync(workdir) && readdirSync(workdir).length) throw new Refusal('Arbeitsordner existiert und ist nicht leer');
@@ -271,46 +274,13 @@ function stopChild(run) {
 }
 
 /**
- * Arbeitsbereich <workdir>/ac3-XXXXXX (mkdtemp, 0700). Fehlt <workdir>, legt der Prüfstand es an
- * und merkt sich den obersten neuen Ordner; jeder Schritt steht sofort in run.scratch.
- */
-function createScratch(run, workdir) {
-  run.scratch = { workdir, created: null, root: null };
-  run.scratch.created = mkdirSync(workdir, { recursive: true, mode: 0o700 }) ?? null;
-  chmodSync(workdir, 0o700);
-  run.scratch.root = mkdtempSync(join(workdir, 'ac3-'));
-  return run.scratch.root;
-}
-
-const isWithin = (path, dir) => {
-  const rel = relative(dir, path);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-};
-
-/**
- * Löscht den Arbeitsbereich, sobald kein Migrationsschritt mehr läuft, und
- * weist nach, dass nichts übrig ist. Liegt die Quelle (aufgelöst) im zu
- * löschenden Ordner, wird nichts gelöscht und das Aufräumen gilt als gescheitert.
+ * Löscht den Arbeitsbereich, sobald kein Migrationsschritt mehr läuft, und weist
+ * nach, dass nichts übrig ist (scripts/db-verify-copy-scratch.mjs).
  * @returns {Promise<boolean>} true = nachweislich nichts übrig
  */
 async function cleanup(run) {
   await stopChild(run);
-  const scratch = run.scratch;
-  if (!scratch) return true;
-  const target = scratch.created ?? scratch.root;
-  try {
-    if (target && existsSync(target)) {
-      if (!run.source || isWithin(run.source, realpathSync(target))) return false;
-      rmSync(target, { recursive: true, force: true, maxRetries: 2 });
-    }
-    // Nachweis: weder der Klartext-Ordner noch ein angelegtes <workdir> existiert,
-    // und ein vorhandenes <workdir> (beim Start leer) ist wieder leer.
-    if (scratch.root && existsSync(scratch.root)) return false;
-    if (scratch.created) return !existsSync(scratch.created);
-    return !existsSync(scratch.workdir) || readdirSync(scratch.workdir).length === 0;
-  } catch {
-    return false;
-  }
+  return removeScratch(run.scratch, run.source);
 }
 
 /**

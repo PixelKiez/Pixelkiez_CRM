@@ -12,7 +12,7 @@
  * fortlaufend, ob die Kopie noch existiert.
  */
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { assertPrivate, harness, isolatedProject, sha, skip, source, startHarness, waitFor } from './ac3-helpers.mjs';
@@ -34,6 +34,9 @@ const alive = (pid) => {
 const readJson = (path) => {
   try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
 };
+/** Der Schritt läuft und hat seine Signal-Behandlung sicher eingerichtet (erster Puls nach 20 ms). */
+const pulsing = (home) => existsSync(join(home, 'puls.log')) && readFileSync(join(home, 'puls.log'), 'utf8').includes('puls');
+const running = (home) => (pulsing(home) ? readJson(join(home, 'kind.json')) : null);
 
 /** Meldet PID und Rechte (copy.db, ac3-Ordner, Arbeitsordner), dann alle 20 ms, ob die Kopie noch existiert. */
 const REPORTER = `
@@ -163,7 +166,7 @@ for (const [signal, exit] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]
     const { child, done } = startHarness([`--source=${path}`, `--workdir=${work}`], { HOME: home }, stubProject(HANG));
     const stop = deadline(child, home);
     try {
-      const kind = await waitFor(() => readJson(join(home, 'kind.json')), 'Migrationsschritt läuft');
+      const kind = await waitFor(() => running(home), 'Migrationsschritt läuft');
       assert.deepEqual({ copy: kind.copy, root: kind.root, workdir: kind.workdir }, { copy: '600', root: '700', workdir: '700' });
       assert.ok(existsSync(work), 'Klartext existiert während des Laufs');
       child.kill(signal);
@@ -191,7 +194,7 @@ test('M-4 Migrationsschritt ignoriert SIGTERM: SIGKILL nach Wartezeit, gelöscht
   const { child, done } = startHarness([`--source=${path}`, `--workdir=${work}`], { HOME: home }, stubProject(IGNORES_SIGTERM));
   const stop = deadline(child, home);
   try {
-    const kind = await waitFor(() => readJson(join(home, 'kind.json')), 'Migrationsschritt läuft');
+    const kind = await waitFor(() => running(home), 'Migrationsschritt läuft');
     const started = Date.now();
     child.kill('SIGTERM');
     const result = await done;
@@ -238,7 +241,8 @@ test('M-4 Löschen nicht nachweisbar (gesperrter Ordner im Arbeitsbereich) → F
   const { child, done } = startHarness([`--source=${path}`, `--workdir=${signalled}`], { HOME: home }, stubProject(HANG_LOCKED));
   const stop = deadline(child, home);
   try {
-    await waitFor(() => readJson(join(home, 'kind.json')) && existsSync(join(home, 'puls.log')), 'Migrationsschritt läuft');
+    // erst nach dem ersten Puls: dann hat der Schritt den gesperrten Ordner sicher angelegt
+    await waitFor(() => running(home), 'Migrationsschritt läuft');
     child.kill('SIGINT');
     const interrupted = await done;
     assert.equal(interrupted.status, 3, interrupted.stdout + interrupted.stderr);
@@ -277,4 +281,52 @@ test('M-4 Arbeitsordner nicht anlegbar (EACCES): FAIL mit Exit 1 — kein falsch
   } finally {
     chmodSync(parent, 0o700);
   }
+  // ein Pfadteil ist eine Datei (ENOTDIR) oder der Pfad zu lang: ebenso kein falscher Alarm
+  const file = join(tempDir(), 'datei');
+  writeFileSync(file, 'x');
+  // ebenso ein Elternordner ohne Suchrecht (EACCES auch beim Nachsehen) und eine Symlink-Schleife (ELOOP)
+  const blind = join(tempDir(), 'blind');
+  mkdirSync(blind);
+  const loop = join(tempDir(), 'schleife');
+  symlinkSync(loop, loop);
+  chmodSync(blind, 0o600);
+  try {
+    for (const [code, workdir] of [['ENOTDIR', join(file, 'arbeit')], ['ENAMETOOLONG', join(tempDir(), 'x'.repeat(300), 'arbeit')], ['EACCES', join(blind, 'arbeit')], ['ELOOP', join(loop, 'arbeit')]]) {
+      const result = harness([`--source=${path}`, `--workdir=${workdir}`]);
+      assert.equal(result.status, 1, `${code}: ${result.stdout}${result.stderr}`);
+      assert.equal(result.stderr, `PXK-AC3 error=${code}\nPXK-AC3 cleanup=verified\nPXK-AC3 verdict=FAIL\n`);
+    }
+  } finally {
+    chmodSync(blind, 0o700);
+  }
+});
+
+test('M-4 vorhandener Arbeitsordner: auf 0700 gesetzt, bevor der Prüfstand darin Klartext ablegt (bleibt so)', { skip }, () => {
+  const { path } = source();
+  const work = tempDir();
+  chmodSync(work, 0o755);
+  const result = harness([`--source=${path}`, `--workdir=${work}`]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal((statSync(work).mode & 0o777).toString(8), '700');
+});
+
+test('M-1 vorhandener Arbeitsordner: eine Datei des Migrationsschritts außerhalb von ac3-XXXXXX → nicht leer, Exit 3', { skip }, () => {
+  const { path } = source();
+  const work = tempDir();
+  const leaking = stubProject(AFTER_REAL("writeFileSync(join(dirname(dirname(process.env.SQLITE_PATH)), 'rest.db'), 'Klartext');"));
+  const result = harness([`--source=${path}`, `--workdir=${work}`], {}, leaking);
+  assert.equal(result.status, 3, result.stdout + result.stderr);
+  assert.equal(result.value('cleanup='), 'PXK-AC3 cleanup=FAILED');
+  assert.deepEqual(readdirSync(work), ['rest.db']);
+  // dazu nicht mehr lesbar (0300): dass er leer ist, lässt sich nicht nachweisen
+  const locked = tempDir();
+  const unreadable = stubProject(AFTER_REAL("const w = dirname(dirname(process.env.SQLITE_PATH)); writeFileSync(join(w, 'rest.db'), 'Klartext'); chmodSync(w, 0o300);"));
+  try {
+    const result = harness([`--source=${path}`, `--workdir=${locked}`], {}, unreadable);
+    assert.equal(result.status, 3, result.stdout + result.stderr);
+    assert.equal(result.value('cleanup='), 'PXK-AC3 cleanup=FAILED');
+  } finally {
+    chmodSync(locked, 0o700);
+  }
+  assert.deepEqual(readdirSync(locked), ['rest.db']);
 });
