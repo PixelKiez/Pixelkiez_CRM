@@ -323,29 +323,34 @@ test('H-2 L-3: WAL-Index (-shm) des letzten Schreibers kennt mehr abgeschlossene
     chmodSync(`${path}-shm`, 0o600);
   }
   assert.deepEqual(snapshot(dir), before, 'Hauptdatei, -wal und -shm bytegleich');
-  // ebenso, wenn der Kindprozess nicht startet (EAGAIN), das Zeitlimit reißt oder durch ein Signal endet
+  // ebenso, wenn ein Kindprozess (-shm oder Kopf der Hauptdatei, D1) nicht startet (EAGAIN), das Zeitlimit reißt oder durch ein Signal endet
   const faults = {
     EAGAIN: "{ status: null, signal: null, error: Object.assign(new Error('spawnSync EAGAIN'), { code: 'EAGAIN' }) }",
     Zeitlimit: "{ status: null, signal: 'SIGTERM', error: Object.assign(new Error('spawnSync ETIMEDOUT'), { code: 'ETIMEDOUT' }) }",
     Signal: "{ status: null, signal: 'SIGKILL' }",
   };
-  for (const [name, fault] of Object.entries(faults)) {
+  for (const [name, fault] of Object.entries(faults)) for (const shm of [true, false]) {
     const preload = join(tempDir(), 'kind.mjs');
     writeFileSync(preload, `
       import { createRequire, syncBuiltinESMExports } from 'node:module';
       const cp = createRequire(import.meta.url)('node:child_process');
       const real = cp.spawnSync;
       cp.spawnSync = function (file, args, options) {
-        if (args?.[0] === '-e' && String(args[1]).includes('process.argv[1]')) return { pid: 0, output: [null, '', ''], stdout: '', stderr: '', ...${fault} };
+        if (args?.[0] === '-e' && String(args[1]).includes('process.argv[1]') && String(args[2]).endsWith('-shm') === ${shm}) return { pid: 0, output: [null, '', ''], stdout: '', stderr: '', ...${fault} };
         return real.call(this, file, args, options);
       };
       syncBuiltinESMExports();
     `);
     const child = spawnSync(process.execPath, ['--import', preload, '--input-type=module', '-e', `
       const { openProblem } = await import(${JSON.stringify(join(ROOT, 'lib', 'db', 'open.mjs'))});
-      process.stdout.write(String(openProblem(${JSON.stringify(path)}).verdict));
+      const { verdict, detail } = openProblem(${JSON.stringify(path)});
+      process.stdout.write(JSON.stringify({ verdict, detail }));
     `], { encoding: 'utf8' });
-    assert.equal(child.stdout, 'invalid-file', `${name}: ${child.stderr}`);
+    const label = `${name} (${shm ? '-shm' : 'Kopf der Hauptdatei'}): ${child.stderr}`;
+    const { verdict, detail } = JSON.parse(child.stdout || '{}');
+    assert.equal(verdict, 'invalid-file', label);
+    // abgewiesen wegen genau dieses Kindprozesses — kein Rückfall auf Lesen in diesem Prozess
+    assert.match(detail, shm ? /WAL-Index \(-shm\) neben der Datei ist nicht lesbar/ : /keine gültige SQLite-Hauptdatei \(nicht lesbar \(Kindprozess\)\)/, label);
   }
   // der Kindprozess erbt die Umgebung nicht: ein NODE_OPTIONS dieses Prozesses stört ihn nicht
   const { path: plainEnv } = lage(PROD.main, PROD.wal, PROD.shm);
@@ -368,7 +373,7 @@ test('H-2 L-3: WAL-Index (-shm) des letzten Schreibers kennt mehr abgeschlossene
     const fs = require('node:fs');
     const real = cp.spawnSync;
     cp.spawnSync = function (file, args, options) {
-      if (!(args?.[0] === '-e' && String(args[1]).includes('process.argv[1]'))) return real.call(this, file, args, options);
+      if (!(args?.[0] === '-e' && String(args[1]).includes('process.argv[1]') && String(args[2]).endsWith('-shm'))) return real.call(this, file, args, options);
       const saved = fs.readFileSync(args[2]);
       fs.rmSync(args[2]);
       try { return real.call(this, file, args, options); } finally { fs.writeFileSync(args[2], saved); }
