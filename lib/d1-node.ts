@@ -5,13 +5,24 @@
  *   prepare(sql).bind(...args)  -> { run(), all<T>(), first<T>() }
  *   batch(statements)
  */
-import Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-
-const dbPath = process.env.SQLITE_PATH || resolve(process.cwd(), 'data', 'crm.db');
+import type Database from 'better-sqlite3';
+import { existsSync, statSync } from 'node:fs';
+import { MigrationError } from '@/lib/db/errors.mjs';
+import { checkLedger, defaultMigrationsDir, loadMigrations, verifyHead } from '@/lib/db/migrate.mjs';
+import { openDatabase, resolveDbPath } from '@/lib/db/open.mjs';
 
 let connection: Database.Database | null = null;
+
+/**
+ * Nur lesend: Die Datenbank ist migrationsverwaltet, keine Migration steht aus,
+ * und ihr Schema gleicht exakt dem Stand nach allen Dateien in db/migrations.
+ * Repariert nichts — Schema, Ledger und Startdaten legt ausschließlich der
+ * Pre-Start-Schritt `node scripts/db-migrate.mjs` an (npm start, PXK-113).
+ */
+export function verifyMigrated(db: Database.Database) {
+  verifyHead(db);
+  checkLedger(db, loadMigrations(defaultMigrationsDir()), { full: true });
+}
 
 /**
  * Öffnet die Datenbank beim ersten Zugriff, nicht beim Import.
@@ -20,15 +31,32 @@ let connection: Database.Database | null = null;
  * einzulesen. Wurde die Verbindung auf Modulebene aufgebaut, schrieben alle
  * Worker gleichzeitig `PRAGMA journal_mode = WAL` und der Build brach mit
  * "database is locked" ab.
+ *
+ * Erst wird schreibgeschützt geprüft, dann für Requests geöffnet: Eine fehlende,
+ * leere oder nicht migrierte Datei wird so nie angelegt oder beschrieben — auch
+ * nicht durch den Header, den das Umschalten auf WAL in eine leere Datei schreibt.
+ * Eine leere Datei wird gar nicht erst geöffnet: SQLite verwirft beim Öffnen
+ * (auch schreibgeschützt) ein daneben liegendes -wal. Eine ungültige oder
+ * abgeschnittene Hauptdatei und eine nicht unterstützte Node-Laufzeit weist
+ * openDatabase vor jedem Öffnen ab (lib/db/open.mjs). Scheitert die Prüfung,
+ * bleibt keine Verbindung zurück; der nächste Zugriff prüft erneut.
  */
 export function getSqlite(): Database.Database {
   if (connection) return connection;
-  mkdirSync(dirname(dbPath), { recursive: true });
-  connection = new Database(dbPath);
-  connection.pragma('journal_mode = WAL');
-  // Statt sofort zu scheitern, kurz auf einen belegten Schreib-Lock warten.
-  connection.pragma('busy_timeout = 8000');
-  connection.pragma('foreign_keys = ON');
+  const path = resolveDbPath();
+  if (!existsSync(path)) {
+    throw new MigrationError('DB_NOT_MIGRATED', path, 'Datenbankdatei fehlt — vor dem Start npm run db:migrate ausführen');
+  }
+  if (statSync(path).size === 0) {
+    throw new MigrationError('DB_NOT_MIGRATED', path, 'Datenbankdatei ist leer — vor dem Start npm run db:migrate ausführen');
+  }
+  const probe = openDatabase(path, 'inspect');
+  try {
+    verifyMigrated(probe);
+  } finally {
+    probe.close();
+  }
+  connection = openDatabase(path, 'app');
   return connection;
 }
 

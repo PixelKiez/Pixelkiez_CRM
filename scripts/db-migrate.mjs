@@ -9,24 +9,39 @@
  *   node scripts/db-migrate.mjs --adopt-legacy=S2
  *                                            älteren Altstand S1–S4 ausdrücklich übernehmen
  *
+ * `npm start` ist `node scripts/db-migrate.mjs && next start`: Scheitert
+ * dieser Schritt (Exit ≠ 0), startet die App nicht. Sie selbst legt kein
+ * Schema an und schreibt keine Seeds (lib/database.ts, lib/d1-node.ts).
+ *
  * Umgebung: SQLITE_PATH (wie die App), PXK_DB_BACKUP_DIR (Sicherungsziel; in
- * Produktion Pflicht, sobald migriert wird), PXK_DB_ADOPT_LEGACY=Sx,
+ * Produktion Pflicht und ein absoluter Pfad, sobald migriert wird oder Seeds
+ * schreiben würden), PXK_DB_ADOPT_LEGACY=Sx,
  * PXK_DB_ALLOW_FRESH=1 (neue leere Datenbank in Produktion zulassen; nach dem
  * ersten Lauf wieder entfernen), PXK_MIGRATIONS_DIR (nur Tests; in Produktion
  * ignoriert). Diese Variablen werden wie bei Next.js auch aus .env-Dateien
  * gelesen; echte Umgebungsvariablen haben Vorrang.
  * Produktion: siehe lib/db/environment.mjs (NODE_ENV oder
  * RAILWAY_ENVIRONMENT_NAME = production; im Zweifel Produktion).
+ * Laufzeit: Node >=22.14.0 <23 mit Node-API >= 10 (lib/db/runtime.mjs); sonst
+ * Exit 17, bevor better-sqlite3 geladen wird.
  */
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+// Muss der erste Import bleiben: bricht auf nicht unterstützter Node-Laufzeit ab, bevor better-sqlite3 lädt.
+import '../lib/db/runtime-gate.mjs';
+import { randomBytes } from 'node:crypto';
+import { existsSync, readFileSync, renameSync, rmdirSync, statSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import { parseEnv } from 'node:util';
+import { backupVerified } from '../lib/db/backup.mjs';
 import { EXIT_CODES, MigrationError } from '../lib/db/errors.mjs';
+import { contentDigest } from '../lib/db/fingerprint.mjs';
 import { defaultMigrationsDir, runMigrations } from '../lib/db/migrate.mjs';
 import { classifyEnvironment } from '../lib/db/environment.mjs';
-import { openDatabase, resolveDbPath } from '../lib/db/open.mjs';
+import { assertOpenable, openDatabase, openProblem, resolveDbPath } from '../lib/db/open.mjs';
 import { buildReport } from '../lib/db/report.mjs';
-import { runSeeds } from '../lib/db/seed.mjs';
+import { planSeeds, readSeedLeads, runSeeds, seedWriteGate } from '../lib/db/seed.mjs';
+
+/** So meldet runMigrations seine geprüfte Sicherung — direkt nach backupVerified, vor der ersten Transaktion. */
+const RUNNER_BACKUP = /^PXK-DB Sicherung (.+) sha256=([0-9a-f]{64}) bytes=(\d+)$/s;
 
 const USAGE = 'Aufruf: node scripts/db-migrate.mjs [--report | --check] [--no-seed] [--adopt-legacy=S1..S5] [--migrations-dir=PFAD]';
 
@@ -83,6 +98,16 @@ async function main() {
   }
 
   if (args.report || args.check) {
+    // Auch der lesende Bericht öffnet nie eine Datei, bei der SQLite das -wal
+    // verwürfe oder ein -shm anlegte (ungültige Hauptdatei, verwaistes -wal).
+    const unsafe = openProblem(dbPath);
+    if (unsafe.verdict) {
+      console.log(`PXK-DB report mode=${mode}`);
+      console.log(`PXK-DB report sqlite_path=${pathSource} ${dbPath}`);
+      console.log(`PXK-DB report file=${unsafe.detail} — nicht geöffnet`);
+      console.log(`PXK-DB report verdict=${unsafe.verdict}`);
+      return args.report ? 0 : EXIT_CODES.UNKNOWN_SCHEMA;
+    }
     const report = buildReport({ dbPath, migrationsDir, mode, modeReason, pathSource });
     for (const line of report.lines) console.log(line);
     if (args.report) return 0;
@@ -93,8 +118,14 @@ async function main() {
   if (adoptLegacy !== null && !/^S[1-5]$/.test(adoptLegacy)) {
     throw new MigrationError('USAGE', String(adoptLegacy), 'Altstand muss S1 bis S5 sein');
   }
+  // Nur die Laufzeitversion als Diagnose — keine Umgebungswerte.
+  console.log(`PXK-DB runtime node=${process.version}`);
   console.log(`PXK-DB mode=${mode} sqlite_path=${pathSource} ${dbPath} mode_reason=${modeReason}`);
   const allowFresh = env.PXK_DB_ALLOW_FRESH === '1';
+  // Ungültige Hauptdatei (z. B. abgeschnitten) oder fehlende/leere Hauptdatei mit
+  // Daten im -wal: eine unvollständige Kopie oder Wiederherstellung. SQLite
+  // veränderte -wal und Hauptdatei schon beim Öffnen — also nie öffnen (lib/db/open.mjs).
+  assertOpenable(dbPath);
   // Fehlt die Datei in Produktion, wird sie gar nicht erst angelegt.
   if (production && !allowFresh && (!existsSync(dbPath) || statSync(dbPath).size === 0)) {
     throw new MigrationError(
@@ -103,29 +134,139 @@ async function main() {
       'Datenbankdatei fehlt oder ist leer — SQLITE_PATH/Volume prüfen; eine neue Produktionsdatenbank nur mit PXK_DB_ALLOW_FRESH=1',
     );
   }
-  const backupDir = env.PXK_DB_BACKUP_DIR || (production ? null : join(dirname(dbPath), 'backups'));
+  const destination = backupDestination(env, production, dbPath);
+  if (destination.problem) {
+    console.warn(`PXK-DB Hinweis: ${destination.problem} — ein Lauf, der migrieren oder Seeds schreiben müsste, wird verweigert`);
+  }
+  const token = `${process.pid}-${randomBytes(3).toString('hex')}`;
+  const staging = destination.dir ? join(destination.dir, `.partial-${token}`) : null;
+  const log = line => console.log(line);
+  // Die geprüfte Sicherung des Runners wird abgelegt, sobald er sie meldet — also
+  // vor dem ersten Schreibzugriff. Scheitert danach eine Migration, liegt sie
+  // trotzdem geprüft im Ziel.
+  let backup = null;
+  const runnerLog = (line) => {
+    const match = staging && !backup ? RUNNER_BACKUP.exec(line) : null;
+    if (match && dirname(match[1]) === staging) {
+      backup = publish({ path: match[1], sha256: match[2], bytes: Number(match[3]) }, destination.dir);
+      return log(backupLine(backup));
+    }
+    return log(line);
+  };
 
-  const db = openDatabase(dbPath, 'apply');
+  let db;
+  try {
+    db = openDatabase(dbPath, 'apply');
+  } catch (error) {
+    throw unreadable(error, dbPath);
+  }
   try {
     const result = await runMigrations(db, {
       migrationsDir,
       adoptLegacy,
       production,
       allowFresh,
-      backup: backupDir ? { dir: backupDir } : false,
-      log: line => console.log(line),
+      backup: staging ? { dir: staging, token } : false,
+      log: runnerLog,
+    }).catch(error => {
+      throw error?.code === 'BACKUP_DESTINATION_REQUIRED' && destination.problem ? destinationMissing(destination, 'Migration') : error;
     });
+    // Sicherung dieses Laufs (nur geprüft vorhanden): deckt Migration und Seeds.
+    if (result.backup && !backup) {
+      backup = publish(result.backup, destination.dir);
+      log(backupLine(backup));
+    }
     if (allowFresh && result.classification.kind !== 'EMPTY') {
       console.warn('PXK-DB Hinweis: PXK_DB_ALLOW_FRESH=1 ist gesetzt, die Datenbank war aber nicht leer — Variable entfernen, sonst schützt nichts vor einer versehentlich neuen Produktionsdatenbank');
     }
-    const seeds = args.seed ? runSeeds(db, { log: line => console.log(line) }) : null;
+
+    let seeds = null;
+    if (args.seed) {
+      // D4: Seeds schreiben in Produktion nur mit geprüfter Sicherung dieses Laufs —
+      // außer in eine Datenbank, die dieser Lauf selbst leer vorgefunden hat.
+      const guarded = production && result.classification.kind !== 'EMPTY';
+      const plan = planSeeds(db);
+      // Fehlt die Quelle der Startdaten, scheitert der Lauf hier — vor jeder Sicherung.
+      if (plan.leads) readSeedLeads();
+      let digestAtBackup = null;
+      if (guarded && !backup && plan.writes) {
+        if (!staging) throw destinationMissing(destination, 'Seeds');
+        digestAtBackup = contentDigest(db);
+        backup = publish(await backupVerified(db, { dir: staging, label: 'seeds', digest: digestAtBackup, token }), destination.dir);
+        log(backupLine(backup));
+      }
+      seeds = runSeeds(db, { log, beforeWrite: seedWriteGate(db, { required: guarded, backup, digestAtBackup }) });
+    }
     console.log(
       `PXK-DB ok head=${result.head} ${result.actions.length ? result.actions.join(', ') : 'noop'}${seeds ? ` seeds=${seeds.templatesInserted}/${seeds.leadsInserted}` : ''}`,
     );
+  } catch (error) {
+    throw unreadable(error, dbPath);
   } finally {
     db.close();
   }
   return 0;
+}
+
+/**
+ * Sicherungsziel (D5). In Produktion zählt nur ein absoluter Pfad in
+ * PXK_DB_BACKUP_DIR; fehlt er, ist er leer oder relativ, gibt es kein Ziel, und
+ * ein Lauf, der schreiben müsste, wird verweigert. Ein Lauf ohne Schreibbedarf
+ * startet trotzdem (mit Hinweis). Außerhalb der Produktion wie bisher: ohne
+ * Angabe <Datenbankordner>/backups. Ausgegeben werden nur Variablennamen.
+ *
+ * @returns {{ dir: string, problem?: undefined } | { dir?: undefined, problem: string }}
+ */
+function backupDestination(env, production, dbPath) {
+  const value = env.PXK_DB_BACKUP_DIR;
+  if (!production) return { dir: value || join(dirname(dbPath), 'backups') };
+  if (value === undefined) return { problem: 'PXK_DB_BACKUP_DIR fehlt' };
+  if (value.trim() === '') return { problem: 'PXK_DB_BACKUP_DIR ist leer' };
+  if (!isAbsolute(value)) return { problem: 'PXK_DB_BACKUP_DIR ist kein absoluter Pfad' };
+  return { dir: value };
+}
+
+function destinationMissing(destination, what) {
+  return new MigrationError('BACKUP_DESTINATION_REQUIRED', 'PXK_DB_BACKUP_DIR', `${destination.problem} — ${what} würde in Produktion schreiben; ohne geprüfte Sicherung wird nichts geschrieben`);
+}
+
+/**
+ * Sicherungen entstehen in <Ziel>/.partial-<pid>-<zufall>/ und werden nach
+ * bestandener Prüfung (backupVerified), noch vor dem ersten Schreibzugriff, per
+ * rename — im selben Dateisystem atomar — ins Ziel gelegt; der leere
+ * Arbeitsordner verschwindet danach. Jede Datei pre-*.db direkt in
+ * PXK_DB_BACKUP_DIR ist also geprüft, auch wenn die Migration danach scheitert.
+ * Eine abgebrochene Kopie (Prozess beendet, Platte voll) bleibt in .partial-*
+ * und kann nie für eine geprüfte gehalten werden. Gelingt nur das Ablegen nicht,
+ * bleibt die Sicherung geprüft im Arbeitsordner (Hinweis mit Pfad und sha256) —
+ * die Datei wird nie überschrieben. Geloggt wird wie in Release A eine Zeile
+ * `PXK-DB Sicherung <Pfad> sha256=… bytes=…`, mit dem Pfad, an dem sie liegt.
+ */
+function publish(info, dir) {
+  const target = join(dir, basename(info.path));
+  try {
+    if (existsSync(target)) throw new Error('Zieldatei existiert bereits');
+    renameSync(info.path, target);
+  } catch (error) {
+    console.warn(`PXK-DB Hinweis: geprüfte Sicherung ${info.path} sha256=${info.sha256} nicht abgelegt (${error.code ?? error.message}) — sie bleibt im Arbeitsordner`);
+    return info;
+  }
+  try {
+    rmdirSync(dirname(info.path));
+  } catch { /* nicht leer: dort liegt etwas, das ein Mensch ansehen soll */ }
+  return { ...info, path: target };
+}
+
+const backupLine = (info) => `PXK-DB Sicherung ${info.path} sha256=${info.sha256} bytes=${info.bytes}`;
+
+/**
+ * Eine beschädigte oder fremde Datei meldet SQLite erst beim ersten Zugriff.
+ * Das ist ein klarer Grund, den Start zu verweigern — kein interner Fehler.
+ */
+function unreadable(error, dbPath) {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  if (code !== 'SQLITE_NOTADB' && !code.startsWith('SQLITE_CORRUPT')) return error;
+  return new MigrationError('UNKNOWN_SCHEMA', dbPath, `keine lesbare SQLite-Datenbank (${code}: ${error.message}) — Datei bzw. Volume prüfen`);
 }
 
 main().then(

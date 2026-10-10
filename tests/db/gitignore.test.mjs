@@ -73,7 +73,7 @@ test('Migrationen, Fixtures und Startdaten bleiben versionierbar', { skip: !hasG
   const sources = [
     'db/migrations/0001_baseline.sql', 'db/migrations/0002_kuenftig.sql', 'db/migrations/README.md',
     'tests/db/fixtures/legacy-cd2c098.sql', 'tests/db/fixtures/schema-cd2c098.json', 'tests/db/fixtures/legacy-history.json',
-    'data/leads.json', 'lib/db/backup.mjs', 'scripts/db-migrate.mjs',
+    'db/seeds/leads.json', 'lib/db/backup.mjs', 'scripts/db-migrate.mjs',
   ];
   const result = ignored(sources);
   assert.deepEqual(Object.entries(result).filter(([, isIgnored]) => isIgnored).map(([path]) => path), [], 'fälschlich ignoriert');
@@ -87,7 +87,7 @@ test('kein versioniertes File fällt unter die Ignore-Regeln', { skip: !hasGit &
   const tracked = execFileSync('git', ['-C', ROOT, 'ls-files'], { encoding: 'utf8' }).trim().split('\n');
   const result = ignored(tracked);
   assert.deepEqual(Object.entries(result).filter(([, isIgnored]) => isIgnored).map(([path]) => path), []);
-  for (const required of ['db/migrations/0001_baseline.sql', 'tests/db/fixtures/legacy-cd2c098.sql', 'data/leads.json']) {
+  for (const required of ['db/migrations/0001_baseline.sql', 'tests/db/fixtures/legacy-cd2c098.sql', 'db/seeds/leads.json']) {
     assert.ok(tracked.includes(required), `${required} ist versioniert`);
   }
 });

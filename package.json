@@ -3,14 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=22.13.0 <23"
+    "node": ">=22.14.0 <23"
   },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "node scripts/db-migrate.mjs --report; next start",
+    "start": "node scripts/db-migrate.mjs && next start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate",
     "db:migrate": "node scripts/db-migrate.mjs",
     "db:report": "node scripts/db-migrate.mjs --report",
     "db:check": "node scripts/db-migrate.mjs --check",
@@ -18,7 +17,6 @@
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
-    "drizzle-orm": "0.45.2",
     "googleapis": "^176.0.0",
     "next": "16.2.6",
     "nodemailer": "^9.0.5",
@@ -37,7 +35,6 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
-    "drizzle-kit": "0.31.10",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
     "react-server-dom-webpack": "19.2.6",
