@@ -1,0 +1,174 @@
+# PXK-114: typecheck, lint, test, build on every PR to main and every push to main.
+# One job on a GitHub-hosted runner within the free allowance: no secrets, no caches,
+# no artifacts, no deployment. Read-only token, actions pinned to verified commit SHAs.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ci:
+    name: typecheck-lint-test-build
+    # Pinned: ubuntu-latest moves to 26.04 from 2026-10-19.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      npm_config_audit: 'false'
+      npm_config_fund: 'false'
+      npm_config_update_notifier: 'false'
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The PR head itself, not the synthetic merge commit GitHub runs pull_request events on.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify tested commit
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          tested="$(git rev-parse HEAD)"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "event=$EVENT_NAME github.sha=$EVENT_SHA expected=$EXPECTED_SHA tested=$tested tree=$tree base=${BASE_SHA:-n/a}"
+          echo "runner: $(uname -srm) uid=$(id -u) nproc=$(nproc)"
+          if [ "$tested" != "$EXPECTED_SHA" ]; then echo "::error::checked out $tested, expected $EXPECTED_SHA"; exit 1; fi
+          # Independent of the fallback above: a pull_request run must test the PR head, never the merge preview.
+          if [ "$EVENT_NAME" = pull_request ] && { [ -z "$PR_HEAD_SHA" ] || [ "$tested" != "$PR_HEAD_SHA" ] || [ "$tested" = "$EVENT_SHA" ]; }; then
+            echo "::error::pull_request run did not test the PR head"; exit 1
+          fi
+          # The DB suite's permission tests (chmod 000) need a non-root user.
+          if [ "$(id -u)" = 0 ]; then echo "::error::runner must not run as root"; exit 1; fi
+          {
+            echo "### Tested commit"
+            echo "- event: \`$EVENT_NAME\`"
+            echo "- run SHA (\`github.sha\`; merge preview on pull_request): \`$EVENT_SHA\`"
+            echo "- checked out and tested (\`git rev-parse HEAD\`): \`$tested\`"
+            echo "- tree: \`$tree\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up SHA-256-verified Node binaries
+        # 22.14.0 runs every step; 22.13.1 and 22.23.3 are extra runtimes for tests/db (PXK_TEST_NODE_BINARIES).
+        run: |
+          cd "$RUNNER_TEMP"
+          cat > node-sha256.txt <<'SUMS'
+          0d2a5af33c7deab5555c8309cd3f373446fe1526c1b95833935ab3f019733b3b  node-v22.13.1-linux-x64.tar.xz
+          69b09dba5c8dcb05c4e4273a4340db1005abeafe3927efda2bc5b249e80437ec  node-v22.14.0-linux-x64.tar.xz
+          df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de  node-v22.23.3-linux-x64.tar.xz
+          SUMS
+          for v in 22.13.1 22.14.0 22.23.3; do
+            curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --retry 3 \
+              -o "node-v$v-linux-x64.tar.xz" "https://nodejs.org/dist/v$v/node-v$v-linux-x64.tar.xz"
+          done
+          sha256sum --check --strict node-sha256.txt
+          for v in 22.13.1 22.14.0 22.23.3; do tar -xJf "node-v$v-linux-x64.tar.xz"; done
+          echo "$RUNNER_TEMP/node-v22.14.0-linux-x64/bin" >> "$GITHUB_PATH"
+          echo "PXK_TEST_NODE_BINARIES=$RUNNER_TEMP/node-v22.13.1-linux-x64/bin/node:$RUNNER_TEMP/node-v22.14.0-linux-x64/bin/node:$RUNNER_TEMP/node-v22.23.3-linux-x64/bin/node" >> "$GITHUB_ENV"
+
+      - name: Toolchain
+        run: |
+          test "$(node --version)" = v22.14.0
+          test "$(npm --version)" = 10.9.2
+          test "$(command -v node)" = "$RUNNER_TEMP/node-v22.14.0-linux-x64/bin/node"
+          IFS=: read -ra binaries <<< "$PXK_TEST_NODE_BINARIES"
+          for bin in "${binaries[@]}"; do
+            "$bin" -p "[process.execPath, 'node=' + process.versions.node, 'napi=' + process.versions.napi, 'sqlite=' + process.versions.sqlite].join(' ')"
+          done
+          python3 -c 'import fcntl, sqlite3, sys; print("python", sys.version.split()[0], "sqlite", sqlite3.sqlite_version)'
+          git --version
+
+      - name: Install
+        id: install
+        run: |
+          npm ci
+          git diff --exit-code -- package.json package-lock.json
+
+      - name: Typecheck
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: npm run typecheck
+
+      - name: Lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        # Inherited errors are baselined in eslint-suppressions.json; the 3 inherited warnings are the cap.
+        run: npm run lint -- --max-warnings=3
+
+      - name: Lint baseline unchanged
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          git diff --exit-code -- eslint-suppressions.json
+
+      - name: Test
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 35
+        env:
+          PXK114_VITEST_JSON_REPORT: ${{ runner.temp }}/vitest-report.json
+        run: |
+          npm test 2>&1 | tee "$RUNNER_TEMP/npm-test.log"
+          # Completeness gate: both suites ran, nothing failed, skipped, cancelled or todo.
+          node - "$PXK114_VITEST_JSON_REPORT" "$RUNNER_TEMP/npm-test.log" <<'GATE' | tee -a "$GITHUB_STEP_SUMMARY"
+          const fs = require('node:fs');
+          const [reportPath, logPath] = process.argv.slice(2);
+          const problems = [];
+          const check = (ok, message) => { if (!ok) problems.push(message); };
+          const EXPECTED_FILES = ['agent-api.test.ts', 'agent-auth.test.ts', 'agent-keine-anrufe.test.ts', 'harness-guards.test.ts', 'lead-sync.test.ts'];
+          const MIN_VITEST_TESTS = 229;
+          const MIN_DB_TESTS = 210;
+          let v = {};
+          try { v = JSON.parse(fs.readFileSync(reportPath, 'utf8')); } catch (error) { problems.push(`Vitest report missing or unreadable: ${error.message}`); }
+          const files = (v.testResults ?? []).map(r => ({ name: r.name.split('/').pop(), status: r.status, tests: r.assertionResults ?? [] }));
+          check(v.success === true, 'Vitest success !== true');
+          check(JSON.stringify(files.map(f => f.name).sort()) === JSON.stringify(EXPECTED_FILES), `Vitest files: ${files.map(f => f.name).join(', ')}`);
+          for (const f of files) check(f.status === 'passed' && f.tests.length > 0 && f.tests.every(t => t.status === 'passed'), `Vitest file not fully passed: ${f.name}`);
+          check(v.numTotalTests >= MIN_VITEST_TESTS, `Vitest total ${v.numTotalTests} < ${MIN_VITEST_TESTS}`);
+          check(v.numPassedTests === v.numTotalTests, `Vitest passed ${v.numPassedTests} of ${v.numTotalTests}`);
+          for (const key of ['numFailedTests', 'numPendingTests', 'numTodoTests']) check(v[key] === 0, `Vitest ${key}=${v[key]}`);
+          const log = fs.readFileSync(logPath, 'utf8');
+          const db = {};
+          for (const key of ['tests', 'suites', 'pass', 'fail', 'cancelled', 'skipped', 'todo']) {
+            const hits = [...log.matchAll(new RegExp(`^# ${key} (\\d+)$`, 'gm'))];
+            check(hits.length === 1, `node:test summary "# ${key}" found ${hits.length} times`);
+            db[key] = hits.length === 1 ? Number(hits[0][1]) : NaN;
+          }
+          check(db.tests >= MIN_DB_TESTS, `DB tests ${db.tests} < ${MIN_DB_TESTS}`);
+          check(db.pass === db.tests, `DB pass ${db.pass} of ${db.tests}`);
+          for (const key of ['fail', 'cancelled', 'skipped', 'todo']) check(db[key] === 0, `DB ${key}=${db[key]}`);
+          console.log('### Test completeness');
+          console.log(`- Vitest: ${files.length} files, ${v.numTotalTests} tests, ${v.numPassedTests} passed, failed ${v.numFailedTests}, skipped ${v.numPendingTests}, todo ${v.numTodoTests}`);
+          console.log(`- node:test (tests/db): ${db.tests} tests, ${db.pass} passed, fail ${db.fail}, cancelled ${db.cancelled}, skipped ${db.skipped}, todo ${db.todo}`);
+          if (problems.length) {
+            for (const p of problems) console.error(`::error::${p}`);
+            process.exit(1);
+          }
+          console.log('- gate: PASS');
+          GATE
+
+      - name: Build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: npm run build
+
+      - name: Working tree unchanged
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          git status --porcelain --untracked-files=all
+          test -z "$(git status --porcelain --untracked-files=all)"
+          # data/ is gitignored-by-pattern (*.db); no step may create a default database.
+          if [ -e data ]; then echo "::error::data/ was created during CI"; ls -la data; exit 1; fi
