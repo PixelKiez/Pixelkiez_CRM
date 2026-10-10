@@ -497,9 +497,3 @@ describe('Lint-Ratchet der geerbten ESLint-Baseline', { timeout: 300_000 }, () =
     expect(workflow).toMatch(/^\s*git diff --exit-code -- eslint-suppressions\.json\s*$/m);
   });
 });
-
-describe('PXK-114 AC2 Kanarienvogel (absichtlich rot, wird per git revert entfernt, nie mergen)', () => {
-  it('AC2-CANARY schlägt absichtlich fehl, damit CI einmal rot wird', () => {
-    expect('PXK-114 AC2 canary').toBe('green');
-  });
-});
