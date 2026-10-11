@@ -480,23 +480,27 @@ describe('2f PATCH /api/agent/leads/[id]', () => {
     }
     expect(db.snapshot()).toEqual(before);
   });
-  it('U-20 KNOWN_WEAKNESS(non-scalar-binding, PXK-133) {notes:{a:1}} → RangeError Too few parameter values; {notes:true} → TypeError beim Binden; nichts geschrieben', async () => {
+  it('U-20 {notes:{a:1}} / {notes:true} → 400 Ungültiger Wert (PXK-133), kein Handler-Wurf, nichts geschrieben', async () => {
     const { r, db } = await setup({ agentKey: KEY, leads: [L1] });
     const before = db.snapshot();
-    expect((await patch(r, 'PK-0001', { notes: { a: 1 } })).thrown).toEqual({ name: 'RangeError', code: undefined, message: TOO_FEW });
-    expect((await patch(r, 'PK-0001', { notes: true })).thrown).toEqual({ name: 'TypeError', code: undefined, message: BIND_ERROR });
+    for (const notes of [{ a: 1 }, true]) {
+      const res = await patch(r, 'PK-0001', { notes });
+      expect([res.thrown, res.status, res.json]).toEqual([undefined, 400, { error: INVALID('notes') }]);
+    }
     expect(db.snapshot()).toEqual(before);
   });
-  it('U-26 KNOWN_WEAKNESS(non-scalar-binding, PXK-133) Array-Werte verschieben Werte in andere Spalten desselben Leads (nie in einen anderen Lead)', async () => {
+  it('U-26 Array-Werte → 400 Ungültiger Wert (PXK-133), keine Verschiebung in andere Spalten, kein Lead geändert', async () => {
     const { r, db } = await setup({ agentKey: KEY, leads: [L1, { id: 'PK-0002', name: 'Lead 2' }] });
-    const shifted = await patch(r, 'PK-0001', { notes: ['x', 'SHIFTED'], city: [] });
-    expect(shifted.status).toBe(200);
-    expect(db.get("SELECT notes, city FROM leads WHERE id = 'PK-0001'")).toEqual({ notes: 'x', city: 'SHIFTED' });
-    expect((await patch(r, 'PK-0001', { notes: ['x', 'y'] })).thrown).toEqual({ name: 'RangeError', code: undefined, message: TOO_MANY });
+    const before = db.snapshot();
+    for (const body of [{ notes: ['x', 'SHIFTED'], city: [] }, { notes: ['x', 'y'] }]) {
+      const res = await patch(r, 'PK-0001', body);
+      expect([res.thrown, res.status, res.json]).toEqual([undefined, 400, { error: INVALID('notes') }]);
+    }
+    expect(db.get("SELECT notes, city, updated_at FROM leads WHERE id = 'PK-0001'")).toEqual({ notes: null, city: null, updated_at: SEEDED_AT });
     expect(db.get("SELECT notes, city, updated_at FROM leads WHERE id = 'PK-0002'")).toEqual({ notes: null, city: null, updated_at: SEEDED_AT });
+    expect(db.snapshot()).toEqual(before);
   });
-  it('U-27 KNOWN_WEAKNESS — PXK-133 authentifizierter PATCH: Array-Werte umgehen die Status-, Grund- und Preisprüfung (200, Werte außerhalb des Vokabulars bzw. negativer Preis gespeichert) — für Live-Maschinen-Schreibzugriffe NICHT akzeptabel', async () => {
-    // Nur gegen diese Wegwerf-Datenbank; das Verhalten bleibt bis zur eigenen PXK-133-Reparatur bestehen und ist kein Freigabestand.
+  it('U-27 PXK-133 authentifizierter PATCH: Array-Werte umgehen Status-, Grund- und Preisprüfung nicht mehr (400, nichts geschrieben)', async () => {
     const { r, db } = await setup({ agentKey: KEY, leads: [L1, { id: 'PK-0002', name: 'Lead 2' }, { id: 'PK-0003', name: 'Lead 3' }, { id: 'PK-0004', name: 'Lead 4' }] });
     const before = db.snapshot();
     const priceShift = { notes: ['n', -5], priceCents: 100, recontactAt: [] };
@@ -508,24 +512,17 @@ describe('2f PATCH /api/agent/leads/[id]', () => {
     expect(await patch(r, 'PK-0004', { priceCents: -5 })).toMatchObject({ status: 400, json: { error: 'Preis muss eine ganze Zahl in Cent sein.' } });
     expect((await patch(r, 'PK-0003', statusShift, bearer('nope'))).status).toBe(401);
     expect(db.snapshot()).toEqual(before);
-    // Ist-Verhalten mit gültigem Schlüssel: die Array-Elemente rücken in die folgenden SQL-Parameter.
-    const status = await patch(r, 'PK-0001', statusShift);
-    expect(status.status).toBe(200);
-    expect(leadOf(status)).toMatchObject({ status: 'KEIN_GUELTIGER_STATUS', notes: 'n', recontactAt: 'Neu' });
-    expect((await patch(r, 'PK-0002', reasonShift)).status).toBe(200);
-    expect((await patch(r, 'PK-0004', priceShift)).status).toBe(200);
-    expect(db.get("SELECT price_cents, recontact_at, status FROM leads WHERE id = 'PK-0004'")).toEqual({ price_cents: -5, recontact_at: '100.0', status: 'Wiedervorlage' });
-    expect(db.all('SELECT id, status, lost_reason, notes, recontact_at, updated_at FROM leads ORDER BY id')).toEqual([
-      { id: 'PK-0001', status: 'KEIN_GUELTIGER_STATUS', lost_reason: null, notes: 'n', recontact_at: 'Neu', updated_at: NOW },
-      { id: 'PK-0002', status: 'Verloren', lost_reason: 'frei_erfunden', notes: 'n', recontact_at: 'kein_interesse', updated_at: NOW },
-      { id: 'PK-0003', status: 'Neu', lost_reason: null, notes: null, recontact_at: null, updated_at: SEEDED_AT },
-      { id: 'PK-0004', status: 'Wiedervorlage', lost_reason: null, notes: 'n', recontact_at: '100.0', updated_at: NOW },
-    ]);
-    expect(db.all('SELECT lead_id, detail FROM activities ORDER BY id')).toEqual([
-      { lead_id: 'PK-0001', detail: 'Agent aktualisierte: notes, status, recontactAt' },
-      { lead_id: 'PK-0002', detail: 'Agent aktualisierte: status, notes, lostReason, recontactAt' },
-      { lead_id: 'PK-0004', detail: 'Agent aktualisierte: notes, priceCents, recontactAt, status · Status automatisch auf „Wiedervorlage" gesetzt' },
-    ]);
+    // Mit gültigem Schlüssel: dieselben Werte im Array werden vor jedem SQL abgelehnt.
+    for (const [id, body] of [['PK-0001', statusShift], ['PK-0002', reasonShift], ['PK-0004', priceShift]] as const) {
+      const res = await patch(r, id, body);
+      expect([id, res.thrown, res.status, res.json]).toEqual([id, undefined, 400, { error: INVALID('notes') }]);
+    }
+    const seeded = (id: string) => ({ id, status: 'Neu', lost_reason: null, notes: null, recontact_at: null, price_cents: null, updated_at: SEEDED_AT });
+    expect(db.all('SELECT id, status, lost_reason, notes, recontact_at, price_cents, updated_at FROM leads ORDER BY id')).toEqual(
+      ['PK-0001', 'PK-0002', 'PK-0003', 'PK-0004'].map(seeded),
+    );
+    expect(db.all('SELECT lead_id, detail FROM activities ORDER BY id')).toEqual([]);
+    expect(db.snapshot()).toEqual(before);
   });
   it("U-21 KNOWN_WEAKNESS(input-validation, PXK-117) {score:'abc'} → 200, INTEGER-Spalte hält TEXT, Antwort score null", async () => {
     const { r, db } = await setup({ agentKey: KEY, leads: [L1] });

@@ -332,11 +332,11 @@ describe('syncLeadPatch', () => {
       notes: [],
     });
   });
-  it('LS-56 KNOWN_WEAKNESS(non-scalar-binding, PXK-133) Felder werden in Eingabereihenfolge durchgereicht, null/Objekt ungeprüft', () => {
+  it('LS-56 Felder werden in Eingabereihenfolge durchgereicht, null erlaubt, Objekt abgelehnt (PXK-133)', () => {
     expect(sync(NEU, { ownerEmail: 'a@b.de' })).toEqual({ keys: ['ownerEmail'], patch: { ownerEmail: 'a@b.de' }, notes: [] });
     expect(sync(NEU, { name: 'X', phone: '1', foo: 2, city: 'Y' })).toEqual({ keys: ['name', 'phone', 'city'], patch: { name: 'X', phone: '1', city: 'Y' }, notes: [] });
     expect(sync(NEU, { name: null })).toEqual({ keys: ['name'], patch: { name: null }, notes: [] });
-    expect(sync(NEU, { notes: { a: 1 } })).toEqual({ keys: ['notes'], patch: { notes: { a: 1 } }, notes: [] });
+    expect(sync(NEU, { notes: { a: 1 } })).toEqual({ error: INVALID('notes') });
   });
 });
 
