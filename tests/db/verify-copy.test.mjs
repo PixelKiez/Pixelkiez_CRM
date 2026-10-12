@@ -20,11 +20,21 @@ import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, r
 import { join } from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
+import { sameFingerprint } from '../../lib/db/fingerprint.mjs';
 import { runMigrations } from '../../lib/db/migrate.mjs';
 import { openDatabase } from '../../lib/db/open.mjs';
 import { compareContent, tableContent } from '../../scripts/db-verify-copy.mjs';
 import { assertPrivate, gitIn, harness, isolatedProject, sha, skip, source, verify } from './ac3-helpers.mjs';
-import { MIGRATIONS_DIR, corruptButStructured, tempDir } from './helpers.mjs';
+import {
+  GOLDEN, HEAD, HEAD_FP, MIGRATIONS_DIR, POST_BASELINE_TABLES, baselineOnlyDir, corruptButStructured, escapeRegExp, future, realActions, realLedger, tempDir,
+} from './helpers.mjs';
+
+const ledgerLine = (variant) => realLedger(variant).map(r => `${r.version}:${r.name}:${r.kind}:${r.legacy_variant ?? '-'}`).join(' ');
+/** Neue, leere Tabellen der Migrationen nach dem Stand der Quelle: genau diese und nur diese Zeilen sind NEW_EMPTY (D12.2). */
+function assertNewEmpty(result, tables = POST_BASELINE_TABLES) {
+  for (const table of tables) assert.equal(result.value(`table=${table} `), `PXK-AC3 table=${table} rows_before=- rows_after=0 content=NEW_EMPTY`);
+  assert.deepEqual(result.lines.filter(l => l.endsWith(' content=NEW_EMPTY')).map(l => /table=(\S+)/.exec(l)[1]).sort(), [...tables].sort());
+}
 
 test('AC3-Probe (synthetisch): produktionsähnliche S5-Kopie mit Daten nur im WAL → PASS, Geschäftsdaten gleich, Metadaten getrennt, zweiter Lauf No-op, Quelle unverändert', { skip }, () => {
   const { dir, path } = source({ walRows: 120 });
@@ -43,10 +53,13 @@ test('AC3-Probe (synthetisch): produktionsähnliche S5-Kopie mit Daten nur im WA
   assert.match(result.value('candidate='), /^PXK-AC3 candidate=([0-9a-f]{40}|[0-9a-f]{64}) clean=yes /);
   assert.equal(result.value('failures='), 'PXK-AC3 failures=none');
   assert.equal(result.value('before class='), 'PXK-AC3 before class=LEGACY_EXACT S5 user_version=0 ledger=absent tables=8');
-  assert.match(result.value('run1 '), /^PXK-AC3 run1 exit=0 error=- head=1 seeds=0\/0 backups_created=1 actions=baselined 0001_baseline \(S5\)$/);
-  assert.equal(result.value('ledger '), 'PXK-AC3 ledger rows=1 1:0001_baseline:baselined:S5 expected=MATCH');
-  assert.equal(result.value('schema '), 'PXK-AC3 schema after_vs_canonical=MATCH before_vs_after=MATCH');
+  assert.match(result.value('run1 '), new RegExp(`^PXK-AC3 run1 exit=0 error=- head=${HEAD} seeds=0/0 backups_created=1 actions=${escapeRegExp(realActions('baselined 0001_baseline (S5)').join(', '))}$`));
+  assert.equal(result.value('ledger '), `PXK-AC3 ledger rows=${HEAD} ${ledgerLine('S5')} expected=MATCH`);
+  // Die Übernahme ändert das Schema nicht; spätere Migrationen dürfen es (vorher = cd2c098, nachher = kanonischer Kopf).
+  const schemaChanged = sameFingerprint({ hashes: GOLDEN.hashes }, HEAD_FP) ? 'MATCH' : 'CHANGED';
+  assert.equal(result.value('schema '), `PXK-AC3 schema after_vs_canonical=MATCH before_vs_after=${schemaChanged}`);
   assert.equal(result.value('table=leads '), `PXK-AC3 table=leads rows_before=${leads} rows_after=${leads} content=MATCH`);
+  assertNewEmpty(result);
   assert.equal(result.value('changed_tables='), 'PXK-AC3 changed_tables=0');
   assert.equal(result.value('backup_vs_before='), 'PXK-AC3 backup_vs_before=MATCH');
   assert.match(result.value('run2 exit'), /actions=noop seeds=0\/0 backups_created=0 noop=MATCH$/);
@@ -73,6 +86,44 @@ test('AC3-Probe erkennt eine Datenänderung durch den Kandidatenlauf (Seeds wür
   assert.equal(result.value('backup_vs_before='), 'PXK-AC3 backup_vs_before=MATCH', 'Sicherung lag vor dem Schreiben');
   assert.match(result.value('failures='), /business_data/);
   assertPrivate(result, ['Ihr Angebot', 'Angebot · Webauftritt']);
+});
+
+test('AC3-Probe (D12.2 NEW_EMPTY): Tabelle einer ausstehenden Migration — leer → NEW_EMPTY und PASS; mit Zeilen → MISMATCH, FAIL (business_data)', { skip }, () => {
+  const { path } = source();
+  const empty = verify(path, isolatedProject({ migrations: { [`${future(1, 'leer')}.sql`]: 'CREATE TABLE ac3_neu_leer (x TEXT);\n' } }));
+  assert.equal(empty.status, 0, empty.stdout + empty.stderr);
+  assertNewEmpty(empty, [...POST_BASELINE_TABLES, 'ac3_neu_leer']);
+  assert.equal(empty.value('changed_tables='), 'PXK-AC3 changed_tables=0');
+  assert.equal(empty.value('failures='), 'PXK-AC3 failures=none');
+  assert.equal(empty.value('verdict='), 'PXK-AC3 verdict=PASS');
+  assertPrivate(empty);
+
+  const filled = verify(path, isolatedProject({ migrations: { [`${future(1, 'voll')}.sql`]: "CREATE TABLE ac3_neu_voll (x TEXT);\nINSERT INTO ac3_neu_voll VALUES ('zeile');\n" } }));
+  assert.equal(filled.status, 1, filled.stdout + filled.stderr);
+  assert.equal(filled.value('table=ac3_neu_voll '), 'PXK-AC3 table=ac3_neu_voll rows_before=- rows_after=1 content=MISMATCH');
+  assertNewEmpty(filled);
+  assert.equal(filled.value('changed_tables='), 'PXK-AC3 changed_tables=1');
+  assert.equal(filled.value('failures='), 'PXK-AC3 failures=business_data');
+  assert.equal(filled.value('verdict='), 'PXK-AC3 verdict=FAIL');
+  assertPrivate(filled);
+});
+
+test('AC3-Probe (D12.2 NEW_EMPTY): Quelle bereits migrationsverwaltet (Stand der Baseline) → ausstehende Migrationen legen leere Tabellen an → NEW_EMPTY, PASS', { skip }, async () => {
+  const { path } = source();
+  const db = openDatabase(path, 'apply');
+  await runMigrations(db, { migrationsDir: baselineOnlyDir(), production: false, backup: false });
+  db.close();
+  // Kandidat = echter Satz + eine eigene tabellenanlegende Folgemigration: unabhängig davon, was db/migrations nach der Baseline enthält.
+  const next = future(1, 'leer');
+  const result = verify(path, isolatedProject({ migrations: { [`${next}.sql`]: 'CREATE TABLE ac3_neu_leer (x TEXT);\n' } }));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.value('before class='), /class=MIGRATED user_version=1 ledger=ok /);
+  assert.match(result.value('run1 '), new RegExp(`actions=${escapeRegExp([...realActions().slice(1), `applied ${next}`].join(', '))}$`));
+  assert.equal(result.value('ledger '), `PXK-AC3 ledger rows=${HEAD + 1} ${ledgerLine('S5')} ${HEAD + 1}:${next}:applied:- expected=MATCH`);
+  assertNewEmpty(result, [...POST_BASELINE_TABLES, 'ac3_neu_leer']);
+  assert.equal(result.value('changed_tables='), 'PXK-AC3 changed_tables=0');
+  assert.equal(result.value('verdict='), 'PXK-AC3 verdict=PASS');
+  assertPrivate(result);
 });
 
 test('AC3-Probe: Kandidat verweigert (älterer Altstand S3 ohne Freigabe) → FAIL mit Fehlercode, Kopie bleibt Altstand, Quelle unverändert', { skip }, () => {
@@ -269,6 +320,19 @@ test('Prüfsumme: verlustfrei und unabhängig von der Einfügereihenfolge — er
   // compareContent meldet genau die betroffene Tabelle
   const other = { t: digest(mutations['Wert geändert']), u: base };
   assert.deepEqual(compareContent({ t: base, u: base }, other).map(t => [t.name, t.match]), [['t', false], ['u', true]]);
+});
+
+test('compareContent: NEW_EMPTY nur für neue, leere, von ausstehenden Migrationen angelegte Tabellen', () => {
+  const t = (rows, mac = 'm') => ({ rows, mac });
+  const before = { alt: t(3), geleert: t(2) };
+  const after = { alt: t(3), geleert: t(0, 'x'), neu_leer: t(0), neu_voll: t(1), fremd_leer: t(0) };
+  // geleert: Tabelle einer bereits angewandten Migration (vorher vorhanden) — nie NEW_EMPTY, auch wenn sie in `created` stünde.
+  const created = ['neu_leer', 'neu_voll', 'geleert'];
+  assert.deepEqual(compareContent(before, after, [], created).map(r => [r.name, r.match, r.newEmpty]), [
+    ['alt', true, false], ['fremd_leer', false, false], ['geleert', false, false], ['neu_leer', false, true], ['neu_voll', false, false],
+  ]);
+  // ohne angelegte Tabellen (bisheriger Aufruf) gibt es kein NEW_EMPTY
+  assert.ok(compareContent(before, after).every(r => !r.newEmpty));
 });
 
 test('Prüfsummen hängen am Schlüssel dieses Prozesses: anderer Schlüssel → andere Werte, gleicher → gleiche', () => {

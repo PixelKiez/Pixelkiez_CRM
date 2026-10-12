@@ -5,17 +5,28 @@ import { test } from 'node:test';
 import { contentDigest, fingerprint, sameFingerprint, schemaObjects, tableColumns } from '../../lib/db/fingerprint.mjs';
 import { classify, createReferences, loadMigrations, runMigrations, verifyHead } from '../../lib/db/migrate.mjs';
 import { openDatabase } from '../../lib/db/open.mjs';
-import { GOLDEN, MIGRATIONS_DIR, buildLegacy, errorCode, insertSyntheticRows, ledgerRows, migrationsCopy, tempDir } from './helpers.mjs';
+import {
+  GOLDEN, GOLDEN_PART, HEAD, HEAD_FP, MIGRATIONS_DIR, POST_BASELINE_TABLES, baselineOnlyDir, buildLegacy, errorCode, future, goldenPart, goldenPartExact,
+  insertSyntheticRows, ledgerRows, migrationsCopy, realActions, realLedger, tempDir,
+} from './helpers.mjs';
 
 const fresh = (dir = tempDir()) => openDatabase(join(dir, 'crm.db'), 'apply');
 const matchesGolden = (db) => {
   const fp = fingerprint(db);
   return fp.hashes.structural === GOLDEN.hashes.structural && fp.hashes.text === GOLDEN.hashes.text;
 };
+/** Kopf des echten Satzes: kanonisches Schema, und der cd2c098-Anteil ist exakt GOLDEN. */
+const matchesHead = (db) => {
+  const fp = fingerprint(db);
+  return sameFingerprint(fp, HEAD_FP) && goldenPartExact(fp);
+};
+const NEXT = String(HEAD + 1).padStart(4, '0');
 
+// PXK-113 AC1 dynamisch gelesen (D12.1 = A): Der Titel unten gilt wörtlich nur für den Baseline-Satz.
 test('AC1: leere Datenbank → alle Migrationen → Schema gleich dem echten cd2c098-Schema', async () => {
+  // Baseline allein: exakt das cd2c098-Schema.
   const db = fresh();
-  const result = await runMigrations(db, { migrationsDir: MIGRATIONS_DIR });
+  const result = await runMigrations(db, { migrationsDir: baselineOnlyDir() });
   assert.deepEqual(result.actions, ['applied 0001_baseline']);
   const fp = fingerprint(db);
   assert.deepEqual(fp.structural, GOLDEN.structural, 'Tabellen, Spalten/Reihenfolge, Defaults, Indizes, Constraints');
@@ -23,6 +34,15 @@ test('AC1: leere Datenbank → alle Migrationen → Schema gleich dem echten cd2
   assert.deepEqual(ledgerRows(db), [{ version: 1, name: '0001_baseline', kind: 'applied', legacy_variant: null }]);
   assert.equal(db.pragma('user_version', { simple: true }), 1);
   db.close();
+  // Alle echten Migrationen: der cd2c098-Anteil bleibt exakt (spätere Migrationen rein additiv), dazu der kanonische Kopf.
+  const head = fresh();
+  assert.deepEqual((await runMigrations(head, { migrationsDir: MIGRATIONS_DIR })).actions, realActions());
+  const headFp = fingerprint(head);
+  assert.deepEqual(goldenPart(headFp), GOLDEN_PART, 'cd2c098-Objekte unverändert');
+  assert.ok(sameFingerprint(headFp, HEAD_FP), 'Schema = kanonischer Kopf aus db/migrations');
+  assert.deepEqual(ledgerRows(head), realLedger());
+  assert.equal(head.pragma('user_version', { simple: true }), HEAD);
+  head.close();
 });
 
 test('AC1: die unabhängige Altstand-Fixture entspricht dem echten cd2c098-Schema', () => {
@@ -46,7 +66,7 @@ test('AC2: zweiter Lauf ändert nichts (gleiche und neue Verbindung)', async () 
   assert.deepEqual(third.actions, []);
   assert.equal(reopened.pragma('schema_version', { simple: true }), schemaVersion);
   assert.deepEqual(contentDigest(reopened), digest);
-  assert.equal(ledgerRows(reopened).length, 1);
+  assert.equal(ledgerRows(reopened).length, HEAD);
   reopened.close();
 });
 
@@ -57,7 +77,8 @@ test('AC3: exakter cd2c098-Altstand mit Daten wird nur per Metadaten übernommen
   const digestBefore = contentDigest(db);
   const fpBefore = fingerprint(db);
   const objectsBefore = schemaObjects(db).map(o => `${o.type}:${o.name}`);
-  const result = await runMigrations(db, { migrationsDir: MIGRATIONS_DIR, backup: { dir: join(dir, 'backups') } });
+  // genau die Übernahme (Satz = Baseline): nur Metadaten
+  const result = await runMigrations(db, { migrationsDir: baselineOnlyDir(), backup: { dir: join(dir, 'backups') } });
   assert.deepEqual(result.actions, ['baselined 0001_baseline (S5)']);
   assert.ok(result.backup?.sha256, 'geprüfte Sicherung angelegt');
   // VERBOTENE Geschäftsdatenänderung: keine
@@ -68,6 +89,28 @@ test('AC3: exakter cd2c098-Altstand mit Daten wird nur per Metadaten übernommen
   assert.deepEqual(ledgerRows(db), [{ version: 1, name: '0001_baseline', kind: 'baselined', legacy_variant: 'S5' }]);
   assert.equal(db.pragma('user_version', { simple: true }), 1);
   db.close();
+
+  // Echter Satz in EINEM Lauf (so trifft das Release den Altstand): Übernahme, dann die späteren Migrationen.
+  // Bestehende Daten und Objekte bleiben exakt, neue Tabellen sind leer.
+  const dir2 = tempDir();
+  const db2 = buildLegacy(join(dir2, 'crm.db'), 'S5');
+  insertSyntheticRows(db2);
+  const columns2 = tableColumns(db2);
+  const digest2 = contentDigest(db2);
+  const objects2 = schemaObjects(db2).map(o => `${o.type}:${o.name}:${o.sql}`);
+  const full = await runMigrations(db2, { migrationsDir: MIGRATIONS_DIR, backup: { dir: join(dir2, 'backups') } });
+  assert.deepEqual(full.actions, realActions('baselined 0001_baseline (S5)'));
+  assert.ok(full.backup?.sha256, 'geprüfte Sicherung angelegt');
+  assert.deepEqual(contentDigest(db2, columns2), digest2, 'keine Geschäftsdatenänderung');
+  const after2 = contentDigest(db2);
+  assert.deepEqual(Object.keys(after2).filter(t => !digest2[t]).sort(), POST_BASELINE_TABLES, 'genau die Tabellen späterer Migrationen sind neu');
+  for (const table of POST_BASELINE_TABLES) assert.equal(after2[table]?.rows, 0, `${table}: neu und leer`);
+  const objectsAfter2 = new Set(schemaObjects(db2).map(o => `${o.type}:${o.name}:${o.sql}`));
+  assert.deepEqual(objects2.filter(o => !objectsAfter2.has(o)), [], 'jedes bestehende Objekt unverändert');
+  assert.ok(matchesHead(db2));
+  assert.deepEqual(ledgerRows(db2), realLedger('S5'));
+  assert.equal(db2.pragma('user_version', { simple: true }), HEAD);
+  db2.close();
 });
 
 test('AC3b: älterer Altstand nur mit Freigabe; Daten bleiben, neue Spalten mit Defaults', async () => {
@@ -85,8 +128,8 @@ test('AC3b: älterer Altstand nur mit Freigabe; Daten bleiben, neue Spalten mit 
   assert.deepEqual(contentDigest(db), digestBefore);
 
   const result = await runMigrations(db, { migrationsDir: MIGRATIONS_DIR, adoptLegacy: 'S2', backup: { dir: join(dir, 'backups') } });
-  assert.deepEqual(result.actions, ['baselined 0001_baseline (S2)']);
-  assert.ok(matchesGolden(db));
+  assert.deepEqual(result.actions, realActions('baselined 0001_baseline (S2)'));
+  assert.ok(matchesHead(db));
   assert.deepEqual(contentDigest(db, columnsBefore), digestBefore, 'bestehende Spalten unverändert');
   assert.deepEqual(db.prepare('SELECT DISTINCT contact_attempts AS a, owner_email AS o FROM leads').all(), [{ a: 0, o: null }]);
 
@@ -101,7 +144,7 @@ test('AC3b: älterer Altstand nur mit Freigabe; Daten bleiben, neue Spalten mit 
 test('AC4: Migration scheitert nach Zwischenschritt → Rollback, Ledger unverändert, Fehler nennt die Migration', async () => {
   const dir = migrationsCopy({
     // Probelauf auf leerer Kopie gelingt; auf echten Daten scheitert der UNIQUE-Index.
-    '0002_break.sql': 'CREATE TABLE thing (x TEXT);\nALTER TABLE leads ADD COLUMN thing_id TEXT;\nCREATE UNIQUE INDEX idx_break ON leads(status);\n',
+    [`${future(1, 'break')}.sql`]: 'CREATE TABLE thing (x TEXT);\nALTER TABLE leads ADD COLUMN thing_id TEXT;\nCREATE UNIQUE INDEX idx_break ON leads(status);\n',
   });
   const db = fresh();
   await runMigrations(db, { migrationsDir: MIGRATIONS_DIR });
@@ -110,32 +153,32 @@ test('AC4: Migration scheitert nach Zwischenschritt → Rollback, Ledger unverä
   const digest = contentDigest(db);
   const error = await errorCode(() => runMigrations(db, { migrationsDir: dir }));
   assert.equal(error?.code, 'MIGRATION_FAILED');
-  assert.match(error.message, /0002_break/);
+  assert.match(error.message, new RegExp(future(1, 'break')));
   assert.equal(db.inTransaction, false);
   assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'thing'").get(), undefined, 'Tabelle aus der gescheiterten Migration fehlt');
   assert.ok(!tableColumns(db).leads.includes('thing_id'), 'Spalte aus der gescheiterten Migration fehlt');
-  assert.equal(ledgerRows(db).length, 1);
-  assert.equal(db.pragma('user_version', { simple: true }), 1);
+  assert.equal(ledgerRows(db).length, HEAD);
+  assert.equal(db.pragma('user_version', { simple: true }), HEAD);
   assert.deepEqual(contentDigest(db), digest);
-  assert.ok(matchesGolden(db));
+  assert.ok(matchesHead(db));
   db.close();
 });
 
 test('AC4: Syntaxfehler fällt schon im Probelauf auf, echte Datenbank unberührt', async () => {
-  const dir = migrationsCopy({ '0002_bad.sql': 'CREATE TABLE ok_part (x);\nINSERT INTO does_not_exist VALUES (1);\n' });
+  const dir = migrationsCopy({ [`${future(1, 'bad')}.sql`]: 'CREATE TABLE ok_part (x);\nINSERT INTO does_not_exist VALUES (1);\n' });
   const db = fresh();
   await runMigrations(db, { migrationsDir: MIGRATIONS_DIR });
   const error = await errorCode(() => runMigrations(db, { migrationsDir: dir }));
   assert.equal(error?.code, 'MIGRATION_FAILED');
-  assert.match(error.message, /0002_bad.*Probelauf/);
+  assert.match(error.message, new RegExp(`${future(1, 'bad')}.*Probelauf`));
   assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'ok_part'").get(), undefined);
-  assert.equal(ledgerRows(db).length, 1);
+  assert.equal(ledgerRows(db).length, HEAD);
   db.close();
 });
 
 test('weitere Migration wird angewandt, Trigger mit BEGIN…END ist erlaubt und atomar', async () => {
   const dir = migrationsCopy({
-    '0002_trigger.sql': [
+    [`${future(1, 'trigger')}.sql`]: [
       'CREATE TABLE audit_probe (id INTEGER PRIMARY KEY, note TEXT);',
       "CREATE TRIGGER trg_probe AFTER INSERT ON audit_probe BEGIN UPDATE audit_probe SET note = CASE WHEN NEW.note IS NULL THEN 'leer' ELSE NEW.note END WHERE id = NEW.id; END;",
       '',
@@ -143,34 +186,37 @@ test('weitere Migration wird angewandt, Trigger mit BEGIN…END ist erlaubt und 
   });
   const db = fresh();
   const result = await runMigrations(db, { migrationsDir: dir });
-  assert.deepEqual(result.actions, ['applied 0001_baseline', 'applied 0002_trigger']);
-  assert.equal(db.prepare("SELECT count(*) AS c FROM sqlite_master WHERE type = 'trigger'").get().c, 1);
-  assert.deepEqual(verifyHead(db, { migrationsDir: dir }), { head: 2 });
+  assert.deepEqual(result.actions, [...realActions(), `applied ${future(1, 'trigger')}`]);
+  assert.equal(db.prepare("SELECT count(*) AS c FROM sqlite_master WHERE type = 'trigger'").get().c, HEAD_FP.structural.triggers.length + 1);
+  assert.equal(db.prepare("SELECT count(*) AS c FROM sqlite_master WHERE type = 'trigger' AND name = 'trg_probe'").get().c, 1);
+  assert.deepEqual(verifyHead(db, { migrationsDir: dir }), { head: HEAD + 1 });
   db.close();
 });
 
 test('NEG: Prüfsumme einer angewandten Migration geändert → CHECKSUM_MISMATCH; nur CRLF/BOM → kein Fehler', async () => {
-  const dir = migrationsCopy({ '0002_x.sql': 'CREATE TABLE x2 (a TEXT);\n' });
+  const file = `${future(1, 'x')}.sql`;
+  const dir = migrationsCopy({ [file]: 'CREATE TABLE x2 (a TEXT);\n' });
   const db = fresh();
   await runMigrations(db, { migrationsDir: dir });
-  writeFileSync(join(dir, '0002_x.sql'), '﻿CREATE TABLE x2 (a TEXT);\r\n');
+  writeFileSync(join(dir, file), '﻿CREATE TABLE x2 (a TEXT);\r\n');
   assert.deepEqual((await runMigrations(db, { migrationsDir: dir })).actions, []);
-  writeFileSync(join(dir, '0002_x.sql'), 'CREATE TABLE x2 (a TEXT); -- nachträglich geändert\n');
+  writeFileSync(join(dir, file), 'CREATE TABLE x2 (a TEXT); -- nachträglich geändert\n');
   assert.equal((await errorCode(() => runMigrations(db, { migrationsDir: dir })))?.code, 'CHECKSUM_MISMATCH');
   db.close();
 });
 
 test('NEG: angewandte Datei fehlt — mittlere → VERSION_GAP, neueste → LEDGER_AHEAD_OF_FILES (DB neuer als Code)', async () => {
-  const dir = migrationsCopy({ '0002_a.sql': 'CREATE TABLE a2 (x);\n', '0003_b.sql': 'CREATE TABLE b3 (x);\n' });
+  const [a, b] = [`${future(1, 'a')}.sql`, `${future(2, 'b')}.sql`];
+  const dir = migrationsCopy({ [a]: 'CREATE TABLE a2 (x);\n', [b]: 'CREATE TABLE b3 (x);\n' });
   const db = fresh();
   await runMigrations(db, { migrationsDir: dir });
-  const middle = migrationsCopy({ '0003_b.sql': 'CREATE TABLE b3 (x);\n' });
+  const middle = migrationsCopy({ [b]: 'CREATE TABLE b3 (x);\n' });
   const gap = await errorCode(() => runMigrations(db, { migrationsDir: middle }));
   assert.equal(gap?.code, 'VERSION_GAP');
-  const newest = migrationsCopy({ '0002_a.sql': 'CREATE TABLE a2 (x);\n' });
+  const newest = migrationsCopy({ [a]: 'CREATE TABLE a2 (x);\n' });
   const ahead = await errorCode(() => runMigrations(db, { migrationsDir: newest }));
   assert.equal(ahead?.code, 'LEDGER_AHEAD_OF_FILES');
-  assert.match(ahead.message, /0003_b/);
+  assert.match(ahead.message, new RegExp(future(2, 'b')));
   const verify = await errorCode(() => verifyHead(db, { migrationsDir: MIGRATIONS_DIR }));
   assert.equal(verify?.code, 'LEDGER_AHEAD_OF_FILES', 'auch der Request-Pfad startet nicht gegen eine neuere Datenbank');
   db.close();
@@ -178,25 +224,25 @@ test('NEG: angewandte Datei fehlt — mittlere → VERSION_GAP, neueste → LEDG
 
 test('NEG: doppelte Version, Lücke, ungültiger Dateiname; .DS_Store und README.md werden ignoriert', async () => {
   const db = fresh();
-  const duplicate = migrationsCopy({ '0002_a.sql': 'SELECT 1;\n', '0002_b.sql': 'SELECT 1;\n' });
+  const duplicate = migrationsCopy({ [`${future(1, 'a')}.sql`]: 'SELECT 1;\n', [`${future(1, 'b')}.sql`]: 'SELECT 1;\n' });
   assert.equal((await errorCode(() => runMigrations(db, { migrationsDir: duplicate })))?.code, 'DUPLICATE_VERSION');
-  const gap = migrationsCopy({ '0003_c.sql': 'SELECT 1;\n' });
+  const gap = migrationsCopy({ [`${future(2, 'c')}.sql`]: 'SELECT 1;\n' });
   assert.equal((await errorCode(() => runMigrations(db, { migrationsDir: gap })))?.code, 'VERSION_GAP');
-  for (const bad of ['0002-x.sql', 'two.sql', '0002_X.sql', '02_x.sql']) {
+  for (const bad of [`${NEXT}-x.sql`, 'two.sql', `${NEXT}_X.sql`, '02_x.sql']) {
     const dir = migrationsCopy({ [bad]: 'SELECT 1;\n' });
     assert.equal((await errorCode(() => runMigrations(db, { migrationsDir: dir })))?.code, 'MALFORMED_FILENAME', bad);
   }
   const ignored = migrationsCopy({ '.DS_Store': 'x', 'README.md': '# Hinweis\n' });
-  assert.deepEqual((await runMigrations(db, { migrationsDir: ignored })).actions, ['applied 0001_baseline']);
+  assert.deepEqual((await runMigrations(db, { migrationsDir: ignored })).actions, realActions());
   db.close();
 });
 
 test('NEG: niedrigere Nummer nach späteren Migrationen eingefügt → RENAMED_OR_REORDERED', async () => {
-  const dir = migrationsCopy({ '0002_a.sql': 'CREATE TABLE a2 (x);\n' });
+  const dir = migrationsCopy({ [`${future(1, 'a')}.sql`]: 'CREATE TABLE a2 (x);\n' });
   const db = fresh();
   await runMigrations(db, { migrationsDir: dir });
-  renameSync(join(dir, '0002_a.sql'), join(dir, '0003_a.sql'));
-  writeFileSync(join(dir, '0002_neu.sql'), 'CREATE TABLE neu2 (x);\n');
+  renameSync(join(dir, `${future(1, 'a')}.sql`), join(dir, `${future(2, 'a')}.sql`));
+  writeFileSync(join(dir, `${future(1, 'neu')}.sql`), 'CREATE TABLE neu2 (x);\n');
   assert.equal((await errorCode(() => runMigrations(db, { migrationsDir: dir })))?.code, 'RENAMED_OR_REORDERED');
   db.close();
 });
@@ -204,22 +250,22 @@ test('NEG: niedrigere Nummer nach späteren Migrationen eingefügt → RENAMED_O
 test('NEG: Transaktionssteuerung in Migrationen wird verweigert', async () => {
   const db = fresh();
   for (const sql of ['COMMIT;', 'BEGIN;', 'END;', 'ROLLBACK;', 'SAVEPOINT s;', 'PRAGMA journal_mode = DELETE;', 'PRAGMA main.journal_mode = DELETE;', 'PRAGMA foreign_keys = OFF;', 'PRAGMA user_version = 9;', "ATTACH 'x.db' AS x;", 'VACUUM;']) {
-    const dir = migrationsCopy({ '0002_tx.sql': `CREATE TABLE t2 (x);\n${sql}\nCREATE TABLE t3 (x);\n` });
+    const dir = migrationsCopy({ [`${future(1, 'tx')}.sql`]: `CREATE TABLE t2 (x);\n${sql}\nCREATE TABLE t3 (x);\n` });
     const error = await errorCode(() => runMigrations(db, { migrationsDir: dir }));
     assert.equal(error?.code, 'FORBIDDEN_STATEMENT', sql);
-    assert.match(error.message, /0002_tx/);
+    assert.match(error.message, new RegExp(future(1, 'tx')));
   }
   assert.equal(ledgerRows(db), null, 'nichts geschrieben');
   db.close();
 });
 
 test('NEG: Transaktion trotz Prüfung verlassen → PARTIAL_APPLY_RESTORE_REQUIRED', async () => {
-  const dir = migrationsCopy({ '0002_x.sql': 'CREATE TABLE x2 (a TEXT);\n' });
+  const dir = migrationsCopy({ [`${future(1, 'x')}.sql`]: 'CREATE TABLE x2 (a TEXT);\n' });
   const db = fresh();
   await runMigrations(db, { migrationsDir: MIGRATIONS_DIR });
   const error = await errorCode(() => runMigrations(db, {
     migrationsDir: dir,
-    hooks: { beforeExec: (migration, conn) => { if (migration.version === 2) conn.exec('COMMIT'); } },
+    hooks: { beforeExec: (migration, conn) => { if (migration.version === HEAD + 1) conn.exec('COMMIT'); } },
   }));
   assert.equal(error?.code, 'PARTIAL_APPLY_RESTORE_REQUIRED');
   assert.equal(error.exitCode, 14);
@@ -235,7 +281,7 @@ test('NEG: Baseline-Datei verändert → LEGACY_DEFINITION_INVALID', async () =>
 
 test('NEG: kaputtes Ledger', async () => {
   const setup = async () => {
-    const dir = migrationsCopy({ '0002_a.sql': 'CREATE TABLE a2 (x);\n' });
+    const dir = migrationsCopy({ [`${future(1, 'a')}.sql`]: 'CREATE TABLE a2 (x);\n' });
     const db = fresh();
     await runMigrations(db, { migrationsDir: dir });
     return { db, dir };
@@ -331,7 +377,7 @@ test('NEG: leere Datenbank in Produktion → FRESH_DB_IN_PRODUCTION, nichts ange
   assert.equal(schemaObjects(db).length, 0);
   assert.equal(ledgerRows(db), null);
   const ok = await runMigrations(db, { migrationsDir: MIGRATIONS_DIR, production: true, allowFresh: true });
-  assert.deepEqual(ok.actions, ['applied 0001_baseline']);
+  assert.deepEqual(ok.actions, realActions());
   db.close();
 });
 
@@ -347,8 +393,8 @@ test('Request-Pfad: verifyHead', async () => {
   const db = fresh();
   assert.equal((await errorCode(() => verifyHead(db, { migrationsDir: MIGRATIONS_DIR })))?.code, 'DB_NOT_MIGRATED');
   await runMigrations(db, { migrationsDir: MIGRATIONS_DIR });
-  assert.deepEqual(verifyHead(db, { migrationsDir: MIGRATIONS_DIR }), { head: 1 });
-  const pending = migrationsCopy({ '0002_a.sql': 'CREATE TABLE a2 (x);\n' });
+  assert.deepEqual(verifyHead(db, { migrationsDir: MIGRATIONS_DIR }), { head: HEAD });
+  const pending = migrationsCopy({ [`${future(1, 'a')}.sql`]: 'CREATE TABLE a2 (x);\n' });
   assert.equal((await errorCode(() => verifyHead(db, { migrationsDir: pending })))?.code, 'MIGRATIONS_PENDING');
   rmSync(pending, { recursive: true, force: true });
   db.close();

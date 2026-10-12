@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { classifyEnvironment } from '../../lib/db/environment.mjs';
 import { runMigrations } from '../../lib/db/migrate.mjs';
-import { MIGRATIONS_DIR, ROOT, buildLegacy, errorCode, insertSyntheticRows, ledgerRows, migrationsCopy, tempDir } from './helpers.mjs';
+import { MIGRATIONS_DIR, ROOT, buildLegacy, errorCode, future, insertSyntheticRows, ledgerRows, migrationsCopy, tempDir } from './helpers.mjs';
 
 const CLI = join(ROOT, 'scripts/db-migrate.mjs');
 const baseEnv = { PATH: process.env.PATH, HOME: process.env.HOME };
@@ -83,7 +83,7 @@ test('CLI nur mit RAILWAY_ENVIRONMENT_NAME=production: Übernahme ohne Sicherung
   const db = buildLegacy(path, 'S5');
   insertSyntheticRows(db);
   db.close();
-  const extra = migrationsCopy({ '0002_extra.sql': 'CREATE TABLE extra2 (x);\n' });
+  const extra = migrationsCopy({ [`${future(1, 'extra')}.sql`]: 'CREATE TABLE extra2 (x);\n' });
   const refused = run([], { ...RAILWAY_ONLY, SQLITE_PATH: path, PXK_MIGRATIONS_DIR: extra });
   assert.equal(refused.status, 15, refused.stderr);
   assert.match(refused.stderr, /abweichender Migrationsordner wird in Produktion ignoriert/);

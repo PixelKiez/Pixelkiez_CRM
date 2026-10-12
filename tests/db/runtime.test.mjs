@@ -17,7 +17,7 @@ import { runMigrations } from '../../lib/db/migrate.mjs';
 import { openDatabase } from '../../lib/db/open.mjs';
 import { runSeeds } from '../../lib/db/seed.mjs';
 import { DDL_PATTERN, runAppScript, stringLiterals } from './app-modules.mjs';
-import { MIGRATIONS_DIR, ROOT, buildLegacy, corruptButStructured, insertSyntheticRows, ledgerRows, tempDir } from './helpers.mjs';
+import { MIGRATIONS_DIR, REAL_MIGRATIONS, ROOT, buildLegacy, corruptButStructured, future, insertSyntheticRows, ledgerRows, tempDir } from './helpers.mjs';
 
 const sha = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
 const sidecars = (path) => ['-wal', '-shm', '-journal'].filter(suffix => existsSync(path + suffix));
@@ -136,12 +136,12 @@ test('App gegen ausstehende Migration: MIGRATIONS_PENDING, nichts angewandt', as
   const path = await migratedDb();
   const project = tempDir();
   mkdirSync(join(project, 'db', 'migrations'), { recursive: true });
-  copyFileSync(join(MIGRATIONS_DIR, '0001_baseline.sql'), join(project, 'db', 'migrations', '0001_baseline.sql'));
-  writeFileSync(join(project, 'db', 'migrations', '0002_district.sql'), 'ALTER TABLE leads ADD COLUMN district TEXT;\n');
+  for (const { file } of REAL_MIGRATIONS) copyFileSync(join(MIGRATIONS_DIR, file), join(project, 'db', 'migrations', file));
+  writeFileSync(join(project, 'db', 'migrations', `${future(1, 'district')}.sql`), 'ALTER TABLE leads ADD COLUMN district TEXT;\n');
   const before = snapshot(path);
   const result = ensure(path, { cwd: project });
   assert.equal(result.error?.code, 'MIGRATIONS_PENDING');
-  assert.match(result.error.message, /0002_district/);
+  assert.match(result.error.message, new RegExp(future(1, 'district')));
   assert.deepEqual(snapshot(path), before);
 });
 
