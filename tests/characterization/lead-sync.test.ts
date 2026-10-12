@@ -17,6 +17,7 @@ const N_6M = 'Wiedervorlage in 6 Monaten vorgemerkt';
 const N_WON_SET = 'Gewonnen-Datum gesetzt';
 const N_WON_REMOVED = 'Gewonnen-Datum entfernt, da Status nicht mehr „Gewonnen"';
 const N_NO_DATE = 'Wiedervorlage ohne Datum — auf 6 Monate gesetzt';
+const INVALID = (key: string) => `Ungültiger Wert für ${key}: nur Text, Zahl oder null erlaubt.`;
 
 const cur = (status: string, attempts: unknown) => ({ status, contact_attempts: attempts });
 /** syncLeadPatch mit sichtbarer Schlüsselreihenfolge (die bestimmt den Aktivitätstext der PATCH-Route). */
@@ -331,11 +332,51 @@ describe('syncLeadPatch', () => {
       notes: [],
     });
   });
-  it('LS-56 KNOWN_WEAKNESS(non-scalar-binding, PXK-133) Felder werden in Eingabereihenfolge durchgereicht, null/Objekt ungeprüft', () => {
+  it('LS-56 Felder werden in Eingabereihenfolge durchgereicht, null erlaubt, Objekt abgelehnt (PXK-133)', () => {
     expect(sync(NEU, { ownerEmail: 'a@b.de' })).toEqual({ keys: ['ownerEmail'], patch: { ownerEmail: 'a@b.de' }, notes: [] });
     expect(sync(NEU, { name: 'X', phone: '1', foo: 2, city: 'Y' })).toEqual({ keys: ['name', 'phone', 'city'], patch: { name: 'X', phone: '1', city: 'Y' }, notes: [] });
     expect(sync(NEU, { name: null })).toEqual({ keys: ['name'], patch: { name: null }, notes: [] });
-    expect(sync(NEU, { notes: { a: 1 } })).toEqual({ keys: ['notes'], patch: { notes: { a: 1 } }, notes: [] });
+    expect(sync(NEU, { notes: { a: 1 } })).toEqual({ error: INVALID('notes') });
+  });
+});
+
+describe('PXK-133 syncLeadPatch: nur Einzelwerte', () => {
+  const NON_SCALAR: unknown[] = [[], ['x'], ['a', 'b'], [['n']], [{ a: 1 }], {}, { a: 1 }, { a: { b: 1 } }];
+  const NUMERIC = ['priceCents', 'contactAttempts'];
+  const VOCAB: Record<string, string> = { status: 'Unbekannter Status', lostReason: 'Unbekannter Grund' };
+  it('V-01 Array/Objekt/verschachtelt für jedes Lead-Feld → Fehler mit Feldname, kein Patch', () => {
+    for (const key of Object.keys(LEAD_COLUMNS)) {
+      for (const value of NON_SCALAR) expect([key, sync(NEU, { [key]: value })]).toEqual([key, { error: INVALID(key) }]);
+    }
+  });
+  it('V-02 true/false → Fehler mit Feldname; status/lostReason behalten die Vokabelprüfung (priceCents/contactAttempts: LS-34, PXK-117)', () => {
+    for (const key of Object.keys(LEAD_COLUMNS).filter(k => !NUMERIC.includes(k))) {
+      for (const value of [true, false]) {
+        expect([key, sync(NEU, { [key]: value })]).toEqual([key, { error: VOCAB[key] ? `${VOCAB[key]}: ${value}` : INVALID(key) }]);
+      }
+    }
+  });
+  it('V-03 gemischt gültig + ungültig → ganzer Patch abgelehnt, erster Nicht-Einzelwert in Eingabereihenfolge; Array/Objekt vor, true/false nach der Vokabel-/Zahlprüfung', () => {
+    expect(sync(NEU, { notes: 'ok', city: { a: 1 } })).toEqual({ error: INVALID('city') });
+    expect(sync(NEU, { status: 'Gewonnen', notes: ['a', 'b'] })).toEqual({ error: INVALID('notes') });
+    expect(sync(NEU, { status: 'KEIN_GUELTIGER_STATUS', notes: { a: 1 } })).toEqual({ error: INVALID('notes') });
+    expect(sync(NEU, { notes: ['n', 'KEIN_GUELTIGER_STATUS'], status: 'Neu', recontactAt: [] })).toEqual({ error: INVALID('notes') });
+    expect(sync(NEU, { notes: 'ok', phone: true })).toEqual({ error: INVALID('phone') });
+    expect(sync(NEU, { status: 'KEIN_GUELTIGER_STATUS', notes: true })).toEqual({ error: 'Unbekannter Status: KEIN_GUELTIGER_STATUS' });
+    expect(sync(NEU, { notes: true, priceCents: 'abc' })).toEqual({ error: 'Preis muss eine ganze Zahl in Cent sein.' });
+  });
+  it('V-04 unbekannte Schlüssel bleiben ignoriert; Object.prototype-Namen jetzt auch (vorher __proto__-Durchgriff bzw. SQL-Fehler)', () => {
+    expect(sync(NEU, { notes: 'n', unknownKey: [1, 2], foo: { a: 1 }, id: 'X', months: [3], action: {} })).toEqual({ keys: ['notes'], patch: { notes: 'n' }, notes: [] });
+    expect(sync(NEU, JSON.parse('{"__proto__":{"status":"Gewonnen"},"notes":"x"}'))).toEqual({ keys: ['notes'], patch: { notes: 'x' }, notes: [] });
+    expect(sync(NEU, { constructor: 'x' })).toEqual({ error: 'Keine gültige Änderung.' });
+    expect(sync(NEU, { toString: 'x', notes: 'n' })).toEqual({ keys: ['notes'], patch: { notes: 'n' }, notes: [] });
+  });
+  it("V-05 Kontrolle: Text, Zahl, null und '' bleiben gültig (UI-Entwurf)", () => {
+    expect(sync(NEU, { name: 'X', score: 50, notes: null, website: '', priceCents: 1500, contactAttempts: 2, lostReason: '', recontactAt: '' })).toEqual({
+      keys: ['name', 'score', 'notes', 'website', 'priceCents', 'contactAttempts', 'lostReason', 'recontactAt'],
+      patch: { name: 'X', score: 50, notes: null, website: null, priceCents: 1500, contactAttempts: 2, lostReason: null, recontactAt: null },
+      notes: [],
+    });
   });
 });
 

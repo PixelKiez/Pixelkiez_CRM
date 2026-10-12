@@ -1,6 +1,6 @@
 import { requireAgentAuth } from '@/lib/agent-auth';
 import { ensureDatabase, getD1, rowToLead } from '@/lib/database';
-import { AGENT_ACTIONS, LEAD_COLUMNS, actionToPatch, syncLeadPatch } from '@/lib/lead-sync';
+import { AGENT_ACTIONS, LEAD_COLUMNS, actionToPatch, invalidValueError, isNonScalar, syncLeadPatch } from '@/lib/lead-sync';
 
 /**
  * Enrich / Update eines Leads durch den Agent.
@@ -25,6 +25,15 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const current = await db.prepare('SELECT status, won_at, price_cents, contact_attempts FROM leads WHERE id=?').bind(id)
     .first<{ status: string; won_at: string | null; price_cents: number | null; contact_attempts: number }>();
   if (!current) return Response.json({ error: 'Lead nicht gefunden.' }, { status: 404 });
+
+  // PXK-133: action/months als Array oder Objekt würden still umgedeutet (Audit-Text, Monatszahl).
+  if (isNonScalar(body.action)) return Response.json({ error: invalidValueError('action'), allowedActions: AGENT_ACTIONS }, { status: 400 });
+  // PXK-133: action als Zahl oder Wahrheitswert wurde still übergangen, die übrigen Felder trotzdem geschrieben
+  // (bei true/5 sogar als „Agent-Aktion: …“ protokolliert). null bleibt wie bisher „keine Aktion“.
+  if (body.action !== undefined && body.action !== null && typeof body.action !== 'string') {
+    return Response.json({ error: `Ungültige Aktion: action muss Text sein. Erlaubt: ${AGENT_ACTIONS.join(', ')}`, allowedActions: AGENT_ACTIONS }, { status: 400 });
+  }
+  if (isNonScalar(body.months)) return Response.json({ error: invalidValueError('months') }, { status: 400 });
 
   let input: Record<string, unknown> = {};
   if (typeof body.action === 'string') {

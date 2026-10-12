@@ -3,12 +3,15 @@
  * echter Request, echte Wegwerf-SQLite. Auth-Matrix und Ping: agent-auth.test.ts.
  * KNOWN_WEAKNESS(<Kategorie>, <Jira>) markiert Verhalten, das das genannte Ticket bewusst ändert; der Test hält es
  * nur fest und erklärt es nicht für akzeptabel.
+ * Block 2i (PXK-133) prüft zusätzlich den Browser-PATCH /api/leads/[id] auf dieselbe Ablehnung (CI erlaubt genau fünf Testdateien).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  TEST_AGENT_KEY as KEY, bearer, getLead, loadAgentRoutes, patchLead as patch, postActivity as addActivity, postLeads as post, searchLeads as search,
+  TEST_AGENT_KEY as KEY, bearer, callRoute, getLead, loadAgentRoutes, patchLead as patch, postActivity as addActivity, postLeads as post, searchLeads as search,
+  type RouteResult,
 } from '../support/route';
-import { createTestDb, disposeAll, type SeedLead, type TestDbOptions } from '../support/test-db';
+import { createTestDb, disposeAll, type SeedLead, type TestDb, type TestDbOptions } from '../support/test-db';
+import { LEAD_COLUMNS } from '@/lib/lead-sync';
 
 const NOW = '2026-10-10T12:00:00.000Z';
 const ALLOWED_ACTIONS = ['nicht_erreicht', 'kein_interesse', 'keine_anrufe', 'spaeter', 'gewonnen'];
@@ -18,6 +21,7 @@ const INJECTED = 'PXK114_INJECTED_ACTIVITY_FAILURE';
 const TOO_FEW = 'Too few parameter values were provided';
 const TOO_MANY = 'Too many parameter values were provided';
 const SEEDED_AT = '2026-01-01T00:00:00.000Z';
+const INVALID = (key: string) => `Ungültiger Wert für ${key}: nur Text, Zahl oder null erlaubt.`;
 const LEAD_KEYS = [
   'id', 'status', 'priority', 'score', 'name', 'category', 'street', 'zip', 'city', 'phone', 'email', 'website', 'websiteStatus',
   'websiteClass', 'ageScore', 'problems', 'pitch', 'source', 'lastContact', 'nextAction', 'followUp', 'notes', 'updatedAt',
@@ -361,12 +365,15 @@ describe('2f PATCH /api/agent/leads/[id]', () => {
     const { r } = await setup({ agentKey: KEY, leads: [L1] });
     expect((await patch(r, 'PK-0001', { action: '' })).json).toEqual({ error: `Unbekannte Aktion: . ${ALLOWED}`, allowedActions: ALLOWED_ACTIONS });
   });
-  it('U-05 KNOWN_WEAKNESS(input-validation, PXK-117) {action:5} → 400 Keine gültige Änderung; {action:5, notes} → 200 mit Detail Agent-Aktion: 5', async () => {
+  it('U-05 {action:5} / {action:5, notes} → 400 Ungültige Aktion mit allowedActions (PXK-133), kein Audit „Agent-Aktion: 5“, nichts geschrieben', async () => {
     const { r, db } = await setup({ agentKey: KEY, leads: [L1] });
-    expect((await patch(r, 'PK-0001', { action: 5 })).json).toEqual({ error: 'Keine gültige Änderung.' });
-    const ok = await patch(r, 'PK-0001', { action: 5, notes: 'n' });
-    expect(ok.status).toBe(200);
-    expect(lastActivity(db)?.detail).toBe('Agent-Aktion: 5');
+    const before = db.snapshot();
+    for (const body of [{ action: 5 }, { action: 5, notes: 'n' }]) {
+      const res = await patch(r, 'PK-0001', body);
+      expect([body, res.status, res.json]).toEqual([body, 400, { error: `Ungültige Aktion: action muss Text sein. ${ALLOWED}`, allowedActions: ALLOWED_ACTIONS }]);
+    }
+    expect(lastActivity(db)).toBeUndefined();
+    expect(db.snapshot()).toEqual(before);
   });
   it('U-06 Sync-Fehler (status Foo / lostReason bogus / priceCents -1 / contactAttempts -1) → 400, nichts geschrieben', async () => {
     const { r, db } = await setup({ agentKey: KEY, leads: [L1] });
@@ -476,23 +483,27 @@ describe('2f PATCH /api/agent/leads/[id]', () => {
     }
     expect(db.snapshot()).toEqual(before);
   });
-  it('U-20 KNOWN_WEAKNESS(non-scalar-binding, PXK-133) {notes:{a:1}} → RangeError Too few parameter values; {notes:true} → TypeError beim Binden; nichts geschrieben', async () => {
+  it('U-20 {notes:{a:1}} / {notes:true} → 400 Ungültiger Wert (PXK-133), kein Handler-Wurf, nichts geschrieben', async () => {
     const { r, db } = await setup({ agentKey: KEY, leads: [L1] });
     const before = db.snapshot();
-    expect((await patch(r, 'PK-0001', { notes: { a: 1 } })).thrown).toEqual({ name: 'RangeError', code: undefined, message: TOO_FEW });
-    expect((await patch(r, 'PK-0001', { notes: true })).thrown).toEqual({ name: 'TypeError', code: undefined, message: BIND_ERROR });
+    for (const notes of [{ a: 1 }, true]) {
+      const res = await patch(r, 'PK-0001', { notes });
+      expect([res.thrown, res.status, res.json]).toEqual([undefined, 400, { error: INVALID('notes') }]);
+    }
     expect(db.snapshot()).toEqual(before);
   });
-  it('U-26 KNOWN_WEAKNESS(non-scalar-binding, PXK-133) Array-Werte verschieben Werte in andere Spalten desselben Leads (nie in einen anderen Lead)', async () => {
+  it('U-26 Array-Werte → 400 Ungültiger Wert (PXK-133), keine Verschiebung in andere Spalten, kein Lead geändert', async () => {
     const { r, db } = await setup({ agentKey: KEY, leads: [L1, { id: 'PK-0002', name: 'Lead 2' }] });
-    const shifted = await patch(r, 'PK-0001', { notes: ['x', 'SHIFTED'], city: [] });
-    expect(shifted.status).toBe(200);
-    expect(db.get("SELECT notes, city FROM leads WHERE id = 'PK-0001'")).toEqual({ notes: 'x', city: 'SHIFTED' });
-    expect((await patch(r, 'PK-0001', { notes: ['x', 'y'] })).thrown).toEqual({ name: 'RangeError', code: undefined, message: TOO_MANY });
+    const before = db.snapshot();
+    for (const body of [{ notes: ['x', 'SHIFTED'], city: [] }, { notes: ['x', 'y'] }]) {
+      const res = await patch(r, 'PK-0001', body);
+      expect([res.thrown, res.status, res.json]).toEqual([undefined, 400, { error: INVALID('notes') }]);
+    }
+    expect(db.get("SELECT notes, city, updated_at FROM leads WHERE id = 'PK-0001'")).toEqual({ notes: null, city: null, updated_at: SEEDED_AT });
     expect(db.get("SELECT notes, city, updated_at FROM leads WHERE id = 'PK-0002'")).toEqual({ notes: null, city: null, updated_at: SEEDED_AT });
+    expect(db.snapshot()).toEqual(before);
   });
-  it('U-27 KNOWN_WEAKNESS — PXK-133 authentifizierter PATCH: Array-Werte umgehen die Status-, Grund- und Preisprüfung (200, Werte außerhalb des Vokabulars bzw. negativer Preis gespeichert) — für Live-Maschinen-Schreibzugriffe NICHT akzeptabel', async () => {
-    // Nur gegen diese Wegwerf-Datenbank; das Verhalten bleibt bis zur eigenen PXK-133-Reparatur bestehen und ist kein Freigabestand.
+  it('U-27 PXK-133 authentifizierter PATCH: Array-Werte umgehen Status-, Grund- und Preisprüfung nicht mehr (400, nichts geschrieben)', async () => {
     const { r, db } = await setup({ agentKey: KEY, leads: [L1, { id: 'PK-0002', name: 'Lead 2' }, { id: 'PK-0003', name: 'Lead 3' }, { id: 'PK-0004', name: 'Lead 4' }] });
     const before = db.snapshot();
     const priceShift = { notes: ['n', -5], priceCents: 100, recontactAt: [] };
@@ -504,24 +515,17 @@ describe('2f PATCH /api/agent/leads/[id]', () => {
     expect(await patch(r, 'PK-0004', { priceCents: -5 })).toMatchObject({ status: 400, json: { error: 'Preis muss eine ganze Zahl in Cent sein.' } });
     expect((await patch(r, 'PK-0003', statusShift, bearer('nope'))).status).toBe(401);
     expect(db.snapshot()).toEqual(before);
-    // Ist-Verhalten mit gültigem Schlüssel: die Array-Elemente rücken in die folgenden SQL-Parameter.
-    const status = await patch(r, 'PK-0001', statusShift);
-    expect(status.status).toBe(200);
-    expect(leadOf(status)).toMatchObject({ status: 'KEIN_GUELTIGER_STATUS', notes: 'n', recontactAt: 'Neu' });
-    expect((await patch(r, 'PK-0002', reasonShift)).status).toBe(200);
-    expect((await patch(r, 'PK-0004', priceShift)).status).toBe(200);
-    expect(db.get("SELECT price_cents, recontact_at, status FROM leads WHERE id = 'PK-0004'")).toEqual({ price_cents: -5, recontact_at: '100.0', status: 'Wiedervorlage' });
-    expect(db.all('SELECT id, status, lost_reason, notes, recontact_at, updated_at FROM leads ORDER BY id')).toEqual([
-      { id: 'PK-0001', status: 'KEIN_GUELTIGER_STATUS', lost_reason: null, notes: 'n', recontact_at: 'Neu', updated_at: NOW },
-      { id: 'PK-0002', status: 'Verloren', lost_reason: 'frei_erfunden', notes: 'n', recontact_at: 'kein_interesse', updated_at: NOW },
-      { id: 'PK-0003', status: 'Neu', lost_reason: null, notes: null, recontact_at: null, updated_at: SEEDED_AT },
-      { id: 'PK-0004', status: 'Wiedervorlage', lost_reason: null, notes: 'n', recontact_at: '100.0', updated_at: NOW },
-    ]);
-    expect(db.all('SELECT lead_id, detail FROM activities ORDER BY id')).toEqual([
-      { lead_id: 'PK-0001', detail: 'Agent aktualisierte: notes, status, recontactAt' },
-      { lead_id: 'PK-0002', detail: 'Agent aktualisierte: status, notes, lostReason, recontactAt' },
-      { lead_id: 'PK-0004', detail: 'Agent aktualisierte: notes, priceCents, recontactAt, status · Status automatisch auf „Wiedervorlage" gesetzt' },
-    ]);
+    // Mit gültigem Schlüssel: dieselben Werte im Array werden vor jedem SQL abgelehnt.
+    for (const [id, body] of [['PK-0001', statusShift], ['PK-0002', reasonShift], ['PK-0004', priceShift]] as const) {
+      const res = await patch(r, id, body);
+      expect([id, res.thrown, res.status, res.json]).toEqual([id, undefined, 400, { error: INVALID('notes') }]);
+    }
+    const seeded = (id: string) => ({ id, status: 'Neu', lost_reason: null, notes: null, recontact_at: null, price_cents: null, updated_at: SEEDED_AT });
+    expect(db.all('SELECT id, status, lost_reason, notes, recontact_at, price_cents, updated_at FROM leads ORDER BY id')).toEqual(
+      ['PK-0001', 'PK-0002', 'PK-0003', 'PK-0004'].map(seeded),
+    );
+    expect(db.all('SELECT lead_id, detail FROM activities ORDER BY id')).toEqual([]);
+    expect(db.snapshot()).toEqual(before);
   });
   it("U-21 KNOWN_WEAKNESS(input-validation, PXK-117) {score:'abc'} → 200, INTEGER-Spalte hält TEXT, Antwort score null", async () => {
     const { r, db } = await setup({ agentKey: KEY, leads: [L1] });
@@ -717,5 +721,285 @@ describe('2h nicht-atomare Schreibvorgänge und Wiederholungen', () => {
     expect(res.map(x => x.status)).toEqual([201, 400]);
     expect(res[1].json).toEqual({ ok: false, created: [], errors: [{ index: 0, error: 'UNIQUE constraint failed: leads.id', name: 'B' }] });
     expect(db.all('SELECT id, name FROM leads')).toEqual([{ id: 'PK-0001', name: 'A' }]);
+  });
+});
+
+describe('2i PXK-133 PATCH Browser (/api/leads/[id]) und Agent: nur Einzelwerte, gleiche Ablehnung', () => {
+  const WIEDERVORLAGE: SeedLead = { id: 'PK-0002', name: 'Wiedervorlage GmbH', status: 'Wiedervorlage', lost_reason: 'spaeter', recontact_at: '2027-01-15' };
+  const KEINE_ANRUFE: SeedLead = { id: 'PK-0003', name: 'Keine Anrufe GmbH', status: 'Verloren', lost_reason: 'keine_anrufe' };
+  const SENTINEL: SeedLead = { id: 'PK-0099', name: 'Sentinel' };
+  const ROUTES = ['browser', 'agent'] as const;
+  async function both(leads: SeedLead[] = [L1, WIEDERVORLAGE, KEINE_ANRUFE, SENTINEL]) {
+    const { r, db } = await setup({ agentKey: KEY, leads });
+    const browser = await import('@/app/api/leads/[id]/route');
+    const routes = {
+      browser: (id: string, body: unknown) => callRoute(browser.PATCH, { method: 'PATCH', path: `/api/leads/${id}`, body, params: { id } }),
+      agent: (id: string, body: unknown) => patch(r, id, body),
+    };
+    return { db, routes };
+  }
+  /** Antwort und jedes schreibende SQL, das der Handler dabei vorbereitet (dieselbe Verbindung wie die Fixture). */
+  async function call(db: TestDb, run: () => Promise<RouteResult>) {
+    const spy = vi.spyOn(db.app(), 'prepare');
+    try {
+      const res = await run();
+      const writes = spy.mock.calls.map(([sql]) => String(sql)).filter(sql => /^\s*(UPDATE|INSERT|DELETE)/i.test(sql));
+      return { res: res.thrown ? { thrown: res.thrown } : { status: res.status, json: res.json }, writes };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+  const rejected = (key: string, extra: object = {}) => ({ res: { status: 400, json: { error: INVALID(key), ...extra } }, writes: [] });
+
+  it('V-10 jedes Lead-Feld × Array/Objekt/verschachtelt, true/false außer status/lostReason/priceCents/contactAttempts: Browser und Agent → identisch 400, kein UPDATE/INSERT, DB unverändert', async () => {
+    const { db, routes } = await both();
+    const before = db.snapshot();
+    const VALUES: Array<[string, unknown]> = [
+      ['[]', []], ["['x']", ['x']], ["['a','b']", ['a', 'b']], ["[['n']]", [['n']]], ['[{a:1}]', [{ a: 1 }]],
+      ['{}', {}], ['{a:1}', { a: 1 }], ['{a:{b:1}}', { a: { b: 1 } }], ['true', true], ['false', false],
+    ];
+    // true/false: status/lostReason → Vokabelfehler (V-02), priceCents/contactAttempts → Zahl (LS-34, PXK-117)
+    const BOOLEAN_ELSEWHERE = ['status', 'lostReason', 'priceCents', 'contactAttempts'];
+    const got: unknown[] = [];
+    const want: unknown[] = [];
+    for (const key of Object.keys(LEAD_COLUMNS)) {
+      for (const [label, value] of VALUES) {
+        if (typeof value === 'boolean' && BOOLEAN_ELSEWHERE.includes(key)) continue;
+        for (const route of ROUTES) {
+          got.push([route, key, label, await call(db, () => routes[route]('PK-0001', { [key]: value }))]);
+          want.push([route, key, label, rejected(key)]);
+        }
+      }
+    }
+    expect(got).toHaveLength(484);
+    expect(got).toEqual(want);
+    expect(db.snapshot()).toEqual(before);
+  });
+  it('V-11 Verschiebe-Bodies (Status/Grund/Preis, Gewonnen ohne Datum, keine_anrufe, negative Versuche) und 1-Element-Arrays → beide Routen 400, kein UPDATE/INSERT', async () => {
+    const { db, routes } = await both();
+    const before = db.snapshot();
+    const cases: Array<[object, string]> = [
+      [{ notes: ['n', 'KEIN_GUELTIGER_STATUS'], status: 'Neu', recontactAt: [] }, 'notes'],
+      [{ status: 'Verloren', notes: ['n', 'frei_erfunden'], lostReason: 'kein_interesse', recontactAt: [] }, 'notes'],
+      [{ notes: ['n', -5], priceCents: 100, recontactAt: [] }, 'notes'],
+      [{ notes: ['n', 'Gewonnen'], status: 'Neu', recontactAt: [] }, 'notes'],
+      [{ notes: ['n', 'keine_anrufe'], lostReason: 'spaeter', recontactAt: [] }, 'notes'],
+      [{ notes: ['n', -7], contactAttempts: 1, recontactAt: [] }, 'notes'],
+      [{ status: ['Gewonnen'] }, 'status'],
+      [{ lostReason: ['keine_anrufe'] }, 'lostReason'],
+      [{ priceCents: [5] }, 'priceCents'],
+    ];
+    for (const [body, key] of cases) {
+      for (const route of ROUTES) expect([route, body, await call(db, () => routes[route]('PK-0001', body))]).toEqual([route, body, rejected(key)]);
+    }
+    expect(db.snapshot()).toEqual(before);
+  });
+  it('V-12 gemischt gültig + ungültig → beide Routen 400 mit dem ersten Nicht-Einzelwert, der gültige Teil wird nicht geschrieben; unbekannte id bleibt 404', async () => {
+    const { db, routes } = await both();
+    const before = db.snapshot();
+    const cases: Array<[object, string]> = [
+      [{ notes: 'Neue Notiz', city: { a: 1 } }, 'city'],
+      [{ notes: 'Neue Notiz', phone: true }, 'phone'],
+      [{ notes: 'Neue Notiz', city: [{ a: 1 }] }, 'city'],
+      [{ status: 'Gewonnen', notes: ['a', 'b'] }, 'notes'],
+      [{ status: 'KEIN_GUELTIGER_STATUS', notes: { a: 1 } }, 'notes'],
+    ];
+    for (const [body, key] of cases) {
+      for (const route of ROUTES) expect([route, body, await call(db, () => routes[route]('PK-0001', body))]).toEqual([route, body, rejected(key)]);
+    }
+    for (const route of ROUTES) {
+      expect([route, await call(db, () => routes[route]('NOPE-404', { notes: { a: 1 } }))]).toEqual([route, { res: { status: 404, json: { error: 'Lead nicht gefunden.' } }, writes: [] }]);
+    }
+    expect(db.snapshot()).toEqual(before);
+  });
+  it('V-13 Vokabular aus crm-vocab in Browser und Agent gleich: ungültiger Status/Grund/Preis/Versuche → identisch 400, nichts geschrieben', async () => {
+    const { db, routes } = await both();
+    const before = db.snapshot();
+    const cases: Array<[object, string]> = [
+      [{ status: 'KEIN_GUELTIGER_STATUS' }, 'Unbekannter Status: KEIN_GUELTIGER_STATUS'],
+      [{ status: 'neu' }, 'Unbekannter Status: neu'],
+      [{ lostReason: 'frei_erfunden' }, 'Unbekannter Grund: frei_erfunden'],
+      [{ priceCents: -5 }, 'Preis muss eine ganze Zahl in Cent sein.'],
+      [{ contactAttempts: -1 }, 'Kontaktversuche müssen eine Zahl ≥ 0 sein.'],
+      [{ status: true }, 'Unbekannter Status: true'],
+      [{ lostReason: false }, 'Unbekannter Grund: false'],
+    ];
+    for (const [body, error] of cases) {
+      for (const route of ROUTES) {
+        expect([route, body, await call(db, () => routes[route]('PK-0001', body))]).toEqual([route, body, { res: { status: 400, json: { error } }, writes: [] }]);
+      }
+    }
+    expect(db.snapshot()).toEqual(before);
+  });
+  it("V-14 Kontrolle: gültige Notiz, UI-Entwurf (null, '', Zahlen, Zusatzschlüssel) und Übernahme gehen auf beiden Routen durch; fremdes Wiedervorlagedatum eines Neu-Leads bleibt", async () => {
+    for (const route of ROUTES) {
+      const { db, routes } = await both([{ ...L1, recontact_at: '2027-03-03' }]);
+      const note = await routes[route]('PK-0001', { notes: 'Neue Notiz' });
+      expect([route, note.status, leadOf(note).notes, leadOf(note).updatedAt]).toEqual([route, 200, 'Neue Notiz', NOW]);
+      const draft = { ...leadOf(note), notes: 'Entwurf', website: '', priceCents: 149000, contactAttempts: 1, lostReason: '', followUp: null };
+      expect(Object.keys(draft)).toEqual(LEAD_KEYS);
+      expect([route, (await routes[route]('PK-0001', draft)).status]).toEqual([route, 200]);
+      expect([route, (await routes[route]('PK-0001', { ownerEmail: 'team@pixelkiez.test' })).status]).toEqual([route, 200]);
+      expect(db.get('SELECT status, notes, website, price_cents, contact_attempts, lost_reason, recontact_at, owner_email FROM leads')).toEqual({
+        status: 'Neu', notes: 'Entwurf', website: null, price_cents: 149000, contact_attempts: 1, lost_reason: null, recontact_at: '2027-03-03',
+        owner_email: 'team@pixelkiez.test',
+      });
+      expect(db.all<{ type: string }>('SELECT type FROM activities ORDER BY id').map(a => a.type)).toEqual(Array(3).fill(route === 'browser' ? 'updated' : 'enriched'));
+      disposeAll();
+    }
+  });
+  it('V-15 Agent: action/months als Array oder Objekt → 400 vor actionToPatch, kein Audit „Agent-Aktion: …“, nichts geschrieben; Browser ignoriert beide wie bisher', async () => {
+    const { db, routes } = await both();
+    const before = db.snapshot();
+    for (const body of [{ action: ['gewonnen'], notes: 'x' }, { action: ['gewonnen'] }, { action: {}, notes: 'x' }, { action: { a: 'keine_anrufe' } }]) {
+      expect([body, await call(db, () => routes.agent('PK-0001', body))]).toEqual([body, rejected('action', { allowedActions: ALLOWED_ACTIONS })]);
+    }
+    for (const body of [{ action: 'spaeter', months: [3] }, { action: 'spaeter', months: {} }, { action: 'spaeter', months: [1e9] }, { notes: 'x', months: [3] }]) {
+      expect([body, await call(db, () => routes.agent('PK-0001', body))]).toEqual([body, rejected('months')]);
+    }
+    expect(db.snapshot()).toEqual(before);
+    // Die Oberfläche kennt keine Aktion: action/months bleiben dort unbekannte Schlüssel.
+    expect((await routes.browser('PK-0001', { action: ['gewonnen'], months: [3], notes: 'x' })).status).toBe(200);
+    expect(db.all('SELECT lead_id, type, detail FROM activities ORDER BY id')).toEqual([{ lead_id: 'PK-0001', type: 'updated', detail: 'Aktualisiert: notes' }]);
+  });
+  it('V-16 keine_anrufe-Marker und Status bleiben bei Nicht-Einzelwerten auf beiden Routen stehen; ein __proto__-Objekt wird wie jeder unbekannte Schlüssel ignoriert', async () => {
+    const { db, routes } = await both();
+    const MARKED = { status: 'Verloren', lost_reason: 'keine_anrufe', won_at: null, recontact_at: null };
+    const marker = () => db.get('SELECT status, lost_reason, won_at, recontact_at FROM leads WHERE id = ?', 'PK-0003');
+    expect(marker()).toEqual(MARKED);
+    const cases: Array<[object, string]> = [
+      [{ notes: ['n', 'kein_interesse'], lostReason: 'spaeter', recontactAt: [] }, 'notes'],
+      [{ status: ['Neu'] }, 'status'],
+      [{ lostReason: [] }, 'lostReason'],
+      [{ lostReason: [null] }, 'lostReason'],
+    ];
+    for (const [body, key] of cases) {
+      for (const route of ROUTES) expect([route, body, await call(db, () => routes[route]('PK-0003', body))]).toEqual([route, body, rejected(key)]);
+    }
+    expect(marker()).toEqual(MARKED);
+    for (const route of ROUTES) {
+      const res = await routes[route]('PK-0003', '{"__proto__":{"status":"Gewonnen"},"notes":"x"}');
+      expect([route, res.status, (res.json as { notes?: unknown }).notes]).toEqual([route, 200, []]);
+      expect([route, marker()]).toEqual([route, MARKED]);
+    }
+    expect(db.all('SELECT type, detail FROM activities ORDER BY id')).toEqual([
+      { type: 'updated', detail: 'Aktualisiert: notes, recontactAt' },
+      { type: 'enriched', detail: 'Agent aktualisierte: notes, recontactAt' },
+    ]);
+  });
+  it('V-17 Wiedervorlage mit eigenem Datum: abgelehnte Nicht-Einzelwerte (auch recontactAt true/false, vorher Bindungsfehler bzw. +6 Monate) lassen recontact_at auf beiden Routen unverändert', async () => {
+    const { db, routes } = await both();
+    const before = db.snapshot();
+    const cases: Array<[object, string]> = [
+      [{ notes: { a: 1 } }, 'notes'],
+      [{ notes: ['n', 'x'], city: [] }, 'notes'],
+      [{ recontactAt: ['2027-02-01'] }, 'recontactAt'],
+      [{ recontactAt: {} }, 'recontactAt'],
+      [{ recontactAt: false }, 'recontactAt'],
+      [{ recontactAt: true }, 'recontactAt'],
+      [{ notes: 'x', recontactAt: false }, 'recontactAt'],
+    ];
+    for (const [body, key] of cases) {
+      for (const route of ROUTES) expect([route, body, await call(db, () => routes[route]('PK-0002', body))]).toEqual([route, body, rejected(key)]);
+    }
+    expect(db.get('SELECT status, lost_reason, recontact_at FROM leads WHERE id = ?', 'PK-0002')).toEqual({ status: 'Wiedervorlage', lost_reason: 'spaeter', recontact_at: '2027-01-15' });
+    expect(db.snapshot()).toEqual(before);
+  });
+  it('V-18 KNOWN_WEAKNESS(lead-state, PXK-136) gültiger PATCH ohne status/recontactAt auf Wiedervorlage setzt das Rückrufdatum auf +6 Monate zurück (beide Routen, von PXK-133 unverändert)', async () => {
+    const { db, routes } = await both();
+    const bodies = { browser: [{ notes: 'Rückruf' }, { ownerEmail: 'team@pixelkiez.test' }], agent: [{ notes: 'Rückruf' }, { ownerEmail: 'team@pixelkiez.test' }, { action: 'nicht_erreicht' }] };
+    for (const route of ROUTES) {
+      for (const body of bodies[route]) {
+        db.run("UPDATE leads SET recontact_at = '2027-01-15' WHERE id = 'PK-0002'");
+        const res = await routes[route]('PK-0002', body);
+        expect([route, body, res.status, leadOf(res).recontactAt, (res.json as { notes?: unknown }).notes])
+          .toEqual([route, body, 200, '2027-04-10', ['Wiedervorlage ohne Datum — auf 6 Monate gesetzt']]);
+      }
+    }
+  });
+
+  // PXK-133 AC2 (G0 Jira 17825): eine gesetzte action muss Text aus AGENT_ACTIONS sein; null zählt wie bisher als fehlend.
+  const unknownAction = (label: string) => ({ res: { status: 400, json: { error: `Unbekannte Aktion: ${label}. ${ALLOWED}`, allowedActions: ALLOWED_ACTIONS } }, writes: [] });
+  const nonTextAction = { res: { status: 400, json: { error: `Ungültige Aktion: action muss Text sein. ${ALLOWED}`, allowedActions: ALLOWED_ACTIONS } }, writes: [] };
+
+  it('V-19 Agent: action als Zahl oder Wahrheitswert (true/false/5/0/1.5/-1), allein oder mit gültiger Notiz → 400 Ungültige Aktion, kein UPDATE/INSERT, kein Audit „Agent-Aktion: …“; unbekannte id bleibt 404; Browser kennt keine action', async () => {
+    const { db, routes } = await both();
+    const before = db.snapshot();
+    for (const action of [true, false, 5, 0, 1.5, -1]) {
+      for (const body of [{ action }, { action, notes: 'Neue Kundennotiz' }]) {
+        expect([body, await call(db, () => routes.agent('PK-0001', body))]).toEqual([body, nonTextAction]);
+      }
+    }
+    expect(await call(db, () => routes.agent('NOPE-404', { action: true, notes: 'x' }))).toEqual({ res: { status: 404, json: { error: 'Lead nicht gefunden.' } }, writes: [] });
+    expect(db.snapshot()).toEqual(before);
+    // Die Oberfläche kennt keine Aktion: action bleibt dort ein unbekannter Schlüssel (wie V-15).
+    expect((await routes.browser('PK-0001', { action: true, notes: 'x' })).status).toBe(200);
+    expect(db.all('SELECT lead_id, type, detail FROM activities ORDER BY id')).toEqual([{ lead_id: 'PK-0001', type: 'updated', detail: 'Aktualisiert: notes' }]);
+  });
+  it('V-20 Agent: unbekannte Aktions-Texte (Groß-/Leerzeichen-Varianten, Zahl/Wahrheitswert als Text, Prototyp-Namen) mit und ohne gültige Notiz → 400 Unbekannte Aktion, nichts geschrieben', async () => {
+    const { db, routes } = await both();
+    const before = db.snapshot();
+    for (const action of ['unbekannte_aktion', 'GEWONNEN', ' gewonnen', 'gewonnen ', 'true', '5', 'toString', 'constructor', '__proto__', 'hasOwnProperty']) {
+      for (const body of [{ action }, { action, notes: 'Neue Kundennotiz' }]) {
+        expect([body, await call(db, () => routes.agent('PK-0001', body))]).toEqual([body, unknownAction(action)]);
+      }
+    }
+    expect(db.snapshot()).toEqual(before);
+  });
+  it('V-21 Agent: ungültige action + sonst gültige Felder (Notiz, Status, Preis, Monate, Rückrufdatum, Grund) → 400 ohne Teiländerung; Wiedervorlage-Datum und keine_anrufe-Marker bleiben', async () => {
+    const { db, routes } = await both();
+    const before = db.snapshot();
+    const cases: Array<[string, object, object]> = [
+      ['PK-0001', { action: true, notes: 'Diese Notiz darf nicht gespeichert werden' }, nonTextAction],
+      ['PK-0001', { action: false, notes: 'Diese Notiz darf nicht gespeichert werden' }, nonTextAction],
+      ['PK-0001', { action: 5, status: 'Gewonnen', priceCents: 149000 }, nonTextAction],
+      ['PK-0001', { action: 1.5, months: 3, ownerEmail: 'team@pixelkiez.test' }, nonTextAction],
+      ['PK-0002', { action: 0, notes: 'Rückruf', recontactAt: '2027-06-01' }, nonTextAction],
+      ['PK-0002', { action: 'unbekannte_aktion', notes: 'Rückruf' }, unknownAction('unbekannte_aktion')],
+      ['PK-0003', { action: true, status: 'Neu', lostReason: null }, nonTextAction],
+      ['PK-0003', { action: 'spaeter ', notes: 'x' }, unknownAction('spaeter ')],
+    ];
+    for (const [id, body, want] of cases) {
+      expect([id, body, await call(db, () => routes.agent(id, body))]).toEqual([id, body, want]);
+    }
+    expect(db.get('SELECT status, lost_reason, recontact_at FROM leads WHERE id = ?', 'PK-0002')).toEqual({ status: 'Wiedervorlage', lost_reason: 'spaeter', recontact_at: '2027-01-15' });
+    expect(db.get('SELECT status, lost_reason FROM leads WHERE id = ?', 'PK-0003')).toEqual({ status: 'Verloren', lost_reason: 'keine_anrufe' });
+    expect(db.snapshot()).toEqual(before);
+  });
+  it('V-22 Agent ohne gültigen Bearer: ungültige wie gültige action → 401 vor jeder Prüfung, kein UPDATE/INSERT, DB unverändert', async () => {
+    const { r, db } = await setup({ agentKey: KEY, leads: [L1] });
+    const before = db.snapshot();
+    const denied = { res: { status: 401, json: { error: 'Ungültiges Bearer-Token.' } }, writes: [] };
+    for (const headers of [{}, bearer('falscher-key'), { authorization: KEY }, bearer(`${KEY}x`)]) {
+      for (const body of [{ action: true, notes: 'x' }, { action: 5 }, { action: 'unbekannte_aktion' }, { action: 'keine_anrufe' }, { notes: 'x' }]) {
+        expect([headers, body, await call(db, () => patch(r, 'PK-0001', body, headers))]).toEqual([headers, body, denied]);
+      }
+    }
+    expect(db.snapshot()).toEqual(before);
+  });
+  it('V-23 Kontrolle (vor und nach dem Fix gleich): fünf AGENT_ACTIONS, spaeter mit months, Notiz ohne action und action null wie fehlend; der Schreib-Spy sieht UPDATE und INSERT', async () => {
+    const SEEDED = { status: 'Neu', lost_reason: null, recontact_at: null, won_at: null, contact_attempts: 0, last_contact: null, notes: null };
+    const cases: Array<[object, object, string]> = [
+      [{ action: 'nicht_erreicht' }, { contact_attempts: 1, last_contact: NOW }, 'Agent-Aktion: nicht_erreicht'],
+      [{ action: 'kein_interesse' }, { status: 'Verloren', lost_reason: 'kein_interesse' }, 'Agent-Aktion: kein_interesse'],
+      [{ action: 'keine_anrufe' }, { status: 'Verloren', lost_reason: 'keine_anrufe' }, 'Agent-Aktion: keine_anrufe'],
+      [{ action: 'spaeter' }, { status: 'Wiedervorlage', lost_reason: 'spaeter', recontact_at: '2027-04-10' }, 'Agent-Aktion: spaeter'],
+      [{ action: 'spaeter', months: 3 }, { status: 'Wiedervorlage', lost_reason: 'spaeter', recontact_at: '2027-01-10' }, 'Agent-Aktion: spaeter'],
+      [{ action: 'gewonnen' }, { status: 'Gewonnen', won_at: NOW }, 'Agent-Aktion: gewonnen · Gewonnen-Datum gesetzt'],
+      [{ notes: 'Neue Kundennotiz' }, { notes: 'Neue Kundennotiz' }, 'Agent aktualisierte: notes'],
+      [{ action: null, notes: 'Neue Kundennotiz' }, { notes: 'Neue Kundennotiz' }, 'Agent aktualisierte: notes'],
+    ];
+    const state = (db: TestDb) => db.get('SELECT status, lost_reason, recontact_at, won_at, contact_attempts, last_contact, notes FROM leads WHERE id = ?', 'PK-0001');
+    for (const [body, changed, detail] of cases) {
+      const { db, routes } = await both([L1]);
+      const { res, writes } = await call(db, () => routes.agent('PK-0001', body));
+      expect([body, res.status, writes.map(sql => sql.trim().split(/\s+/).slice(0, 3).join(' ')), state(db), db.all('SELECT type, detail FROM activities')])
+        .toEqual([body, 200, ['UPDATE leads SET', 'INSERT INTO activities'], { ...SEEDED, ...changed }, [{ type: 'enriched', detail }]]);
+      disposeAll();
+    }
+    const { db, routes } = await both([L1]);
+    const before = db.snapshot();
+    expect(await call(db, () => routes.agent('PK-0001', { action: null }))).toEqual({ res: { status: 400, json: { error: 'Keine gültige Änderung.' } }, writes: [] });
+    expect(db.snapshot()).toEqual(before);
   });
 });

@@ -67,6 +67,13 @@ export function actionToPatch(
 
 const keepsLead = (reason: string) => LOST_REASONS.find(r => r.value === reason)?.keepsLead ?? false;
 
+/**
+ * PXK-133: Ein Lead-Feld ist ein Einzelwert. better-sqlite3 spreizt Arrays in die folgenden
+ * SQL-Parameter und liest Objekte als benannte Parameter; true/false prüft syncLeadPatch gesondert.
+ */
+export const isNonScalar = (value: unknown) => typeof value === 'object' && value !== null;
+export const invalidValueError = (key: string) => `Ungültiger Wert für ${key}: nur Text, Zahl oder null erlaubt.`;
+
 /** Monate auf ein ISO-Datum addieren (für „Wiedervorlage in X Monaten"). */
 export function monthsFromNow(months: number, from = new Date()): string {
   const date = new Date(from.getTime());
@@ -83,7 +90,9 @@ export function syncLeadPatch(current: { status: string; won_at?: unknown; price
   const notes: string[] = [];
 
   for (const [key, value] of Object.entries(input)) {
-    if (LEAD_COLUMNS[key]) patch[key] = value === '' ? null : value;
+    if (!Object.hasOwn(LEAD_COLUMNS, key)) continue;
+    if (isNonScalar(value)) return { error: invalidValueError(key) };
+    patch[key] = value === '' ? null : value;
   }
   if (!Object.keys(patch).length) return { error: 'Keine gültige Änderung.' };
 
@@ -106,6 +115,9 @@ export function syncLeadPatch(current: { status: string; won_at?: unknown; price
     if (!Number.isFinite(attempts) || attempts < 0) return { error: 'Kontaktversuche müssen eine Zahl ≥ 0 sein.' };
     patch.contactAttempts = Math.trunc(attempts);
   }
+  // PXK-133: priceCents/contactAttempts sind hier schon Zahlen (true → 1 bleibt PXK-117), Status/Grund geprüft.
+  const unbindable = Object.keys(patch).find(key => typeof patch[key] === 'boolean');
+  if (unbindable) return { error: invalidValueError(unbindable) };
 
   // --- Grund bestimmt den Status -------------------------------------------
   // "Interesse, aber später" darf den Kunden nicht verlieren.
