@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pxapi:schema:analysis-run-state:1.0.0",
+  "title": "PXAPI analysis run state v1",
+  "description": "The coarse global execution state of one Analysis Run. The vocabulary is deliberately small — CREATED, QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED — and it describes execution only. A business phase, a stage and a provider outcome are not global states and have no representation here; a stage's execution is its own record, linked to this one by run_id alone. SUCCEEDED means execution finished without failing: it does not mean customer release, delivery, report readiness, completed scoring, or legal or security approval, and it does not mean every stage succeeded. This document is the state a run is in, not a history of the states it has been in; durable transition history and replay belong to the persistence slice.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Required. Always 1.0.0 for this contract. Each contract is versioned in its own right; this value is not a version of the contract set as a whole."
+    },
+    "run_id": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/id",
+      "description": "Required. The Analysis Run this state describes. It is the only link between this document and a stage execution record."
+    },
+    "state": {
+      "type": "string",
+      "enum": ["CREATED", "QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"],
+      "description": "Required. The run's global execution state. The vocabulary is closed at these six values: a seventh state, a lifecycle phase name and a stage name are all rejected. Which ordered pairs are legal transitions is decided by the domain, not by this document."
+    },
+    "entered_at": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/timestamp",
+      "description": "Required. When the run entered the state it is currently in."
+    },
+    "finished_at": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/timestamp",
+      "description": "Conditional. Present if and only if the state is terminal — SUCCEEDED, FAILED or CANCELLED. A run that is still CREATED, QUEUED or RUNNING has not finished, so the member is absent rather than null."
+    },
+    "failure": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/code",
+          "description": "Required. A stable, machine-readable code naming why execution failed. The set is open: a consumer treats a code it does not know as a generic execution failure. It is not a stage identifier and does not name the stage that failed."
+        }
+      },
+      "required": ["code"],
+      "additionalProperties": false,
+      "description": "Conditional. Present if and only if the state is FAILED, and absent for every other state including CANCELLED. It carries a code and nothing else: no free text, no stage attribution and no provider detail, so a validator message, an exception or a path cannot reach a client through this member."
+    }
+  },
+  "required": ["schema_version", "run_id", "state", "entered_at"],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": ["SUCCEEDED", "FAILED", "CANCELLED"]
+          }
+        },
+        "required": ["state"]
+      },
+      "then": {
+        "required": ["finished_at"]
+      },
+      "else": {
+        "not": {
+          "required": ["finished_at"]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "FAILED"
+          }
+        },
+        "required": ["state"]
+      },
+      "then": {
+        "required": ["failure"]
+      },
+      "else": {
+        "not": {
+          "required": ["failure"]
+        }
+      }
+    }
+  ]
+}

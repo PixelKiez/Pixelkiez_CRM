@@ -2,40 +2,14 @@
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import type { Activity, Appointment, EmailTemplate, Lead } from '@/lib/types';
+import LeadAnalysisPreview from './lead-analysis-preview';
+import {
+  addMinutes, centsToInput, contactHref, defaultStart, inputToCents,
+  leadActivityLabel, leadLabel, monthsAhead, smartAction, statusOptions,
+  type LeadDrawerTab,
+} from './lead-drawer-utils';
 import { buildLeadContext, renderTemplate } from '@/lib/template-render';
-import { LOST_REASONS, MAX_CONTACT_ATTEMPTS, STATUS_OPTIONS, formatEuro, isCallBlocked, isLost, isRecontact, isWon } from '@/lib/crm-vocab';
-
-const statusOptions = STATUS_OPTIONS;
-/** Datum in X Monaten als YYYY-MM-TT. */
-const monthsAhead = (months: number) => {
-  const date = new Date();
-  date.setMonth(date.getMonth() + months);
-  return date.toISOString().slice(0, 10);
-};
-/** Cent -> Eingabefeld "1499.00" und zurück. */
-const centsToInput = (cents: number | null | undefined) => typeof cents === 'number' ? (cents / 100).toFixed(2) : '';
-const inputToCents = (value: string) => {
-  const normalised = value.replace(/\s/g, '').replace(',', '.');
-  if (!normalised) return null;
-  const euro = Number(normalised);
-  return Number.isFinite(euro) && euro >= 0 ? Math.round(euro * 100) : null;
-};
-const label = (value: string | null) => value ? value.replaceAll('_', ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Nicht angegeben';
-const contactHref = (kind: string, value: string) => kind === 'phone' ? `tel:${value.replace(/\s/g, '')}` : kind === 'email' ? `mailto:${value}` : value.startsWith('http') ? value : `https://${value}`;
-const smartAction = (lead: Lead) => lead.websiteStatus === 'Nein' && lead.phone ? 'Telefonischer Erstkontakt: lokales Webseiten-Paket anbieten' : lead.websiteStatus === 'Prüfen' ? 'Website und Firmenidentität vor der Ansprache verifizieren' : lead.email ? 'Kurze personalisierte E-Mail mit konkretem Verbesserungsvorschlag senden' : 'Kontaktdaten ergänzen und Ansprechpartner recherchieren';
-
-type Tab = 'overview' | 'call' | 'email' | 'appointment' | 'activity';
-
-function fmtLocalDatetime(d: Date) {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-function defaultStart(): string {
-  const d = new Date(); d.setMinutes(0, 0, 0); d.setDate(d.getDate() + 1); d.setHours(10); return fmtLocalDatetime(d);
-}
-function addMinutes(iso: string, minutes: number): string {
-  const d = new Date(iso); d.setMinutes(d.getMinutes() + minutes); return fmtLocalDatetime(d);
-}
+import { LOST_REASONS, MAX_CONTACT_ATTEMPTS, formatEuro, isCallBlocked, isLost, isRecontact, isWon } from '@/lib/crm-vocab';
 
 export default function LeadDrawer({
   lead, setLead, onClose, onSave, onSendEmail, onDelete, templates, onAfterAppointment,
@@ -52,7 +26,7 @@ export default function LeadDrawer({
   templates: EmailTemplate[];
   onAfterAppointment?: () => void;
 }) {
-  const [tab, setTab] = useState<Tab>('overview');
+  const [tab, setTab] = useState<LeadDrawerTab>('overview');
   const [docBusy, setDocBusy] = useState(false);
   const [docMessage, setDocMessage] = useState<{ text: string; kind: 'ok' | 'err' } | null>(null);
   const [activities, setActivities] = useState<Activity[]>([]);
@@ -204,14 +178,14 @@ export default function LeadDrawer({
             <div>
               <span>{lead.id} · Score {lead.score}</span>
               <h2>{lead.name}</h2>
-              <p>{label(lead.category)} · {lead.zip} {lead.city}</p>
+              <p>{leadLabel(lead.category)} · {lead.zip} {lead.city}</p>
             </div>
           </div>
           <button className="close" onClick={onClose} aria-label="Schließen">×</button>
         </header>
 
         <nav className="tabs" role="tablist">
-          {(['overview', 'call', 'email', 'appointment', 'activity'] as Tab[]).map(id => (
+          {(['overview', 'call', 'email', 'appointment', 'activity'] as LeadDrawerTab[]).map(id => (
             <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>
               {id === 'overview' ? 'Übersicht'
                 : id === 'call' ? `Anrufen${lead.phone ? '' : ' (fehlt)'}`
@@ -235,6 +209,7 @@ export default function LeadDrawer({
             <strong>{smartAction(lead)}</strong>
             <p>{lead.pitch || 'Nutze die vorhandenen Kontaktdaten für eine konkrete, lokale Ansprache.'}</p>
           </section>
+          <LeadAnalysisPreview key={lead.id} leadId={lead.id} />
 
           {isCallBlocked(lead.lostReason) && (
             <p className="block-banner" role="note">⛔ Dieser Kunde möchte nicht angerufen werden. Bitte nur schriftlich kontaktieren.</p>
@@ -378,7 +353,7 @@ export default function LeadDrawer({
               <div>
                 <span className="eyebrow">COLD-CALL-LEITFADEN</span>
                 <h3>{lead.name}</h3>
-                <p className="muted">{label(lead.category)}{lead.city ? ` · ${lead.city}` : ''}</p>
+                <p className="muted">{leadLabel(lead.category)}{lead.city ? ` · ${lead.city}` : ''}</p>
               </div>
               {lead.phone
                 ? <a href={contactHref('phone', lead.phone)} className="primary big-call">☎ {lead.phone}</a>
@@ -501,16 +476,7 @@ export default function LeadDrawer({
                   <li key={a.id}>
                     <span className={`dot t-${a.type}`} />
                     <div>
-                      <strong>{
-                        a.type === 'email_sent' ? 'E-Mail gesendet'
-                          : a.type === 'email_failed' ? 'Versand fehlgeschlagen'
-                          : a.type === 'created' ? 'Lead angelegt'
-                          : a.type === 'enriched' ? 'Angereichert (Agent)'
-                          : a.type === 'agent_note' ? 'Agent-Notiz'
-                          : a.type === 'appointment_created' ? 'Termin angelegt'
-                          : a.type === 'appointment_cancelled' ? 'Termin abgesagt'
-                          : 'Bearbeitet'
-                      }</strong>
+                      <strong>{leadActivityLabel(a.type)}</strong>
                       {a.detail && <small>{a.detail}</small>}
                       <time>{new Date(a.created_at).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })}</time>
                     </div>

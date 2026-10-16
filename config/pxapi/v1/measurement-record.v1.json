@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pxapi:schema:measurement-record:1.0.0",
+  "title": "PXAPI measurement record v1",
+  "description": "One normalised observation of one metric about one source, made by one collector at one instant. Downstream components read this shape and never a provider's raw payload. The assessment block decides what the record may then carry: a value exists only when the result is KNOWN, so a measurement that was never taken — because a provider failed, our runtime crashed, a permission was refused, a budget ran out, the subject is unsupported, or nobody asked — arrives carrying no value at all rather than a zero, an empty string or a default. The absence of a record carries no meaning of its own; a record that was not assessed states why in the analysis process's own terms, never in the subject's.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Required. Always 1.0.0 for this contract. Each contract is versioned in its own right; this value is not a version of the contract set as a whole."
+    },
+    "run_id": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/id",
+      "description": "Required. The Analysis Run this record belongs to. It is the only link to the run's state document, and it carries no claim about that run's outcome."
+    },
+    "measurement_id": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/id",
+      "description": "Required. This record's own stable identity. Website evidence references it by this value, so it must stay stable for as long as anything may point at it."
+    },
+    "metric_id": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/code",
+      "description": "Required. A stable machine-readable identifier for what was measured. The vocabulary is deliberately open: this contract fixes the token's lexical shape, never the set of metrics, so a metric a later slice introduces validates here without a schema change. A consumer treats a metric_id it does not know as an unknown metric, never as an error."
+    },
+    "source_url": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/url",
+      "description": "Required. The URL the observation was made against, which is the record's observation context. It is a structural shape only: reachability, redirect policy, egress rules and robots handling belong to the slice that owns the collector runtime, never to this contract."
+    },
+    "observed_at": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/timestamp",
+      "description": "Required. When the observation was made — or, for a record that was not assessed, when the attempt was made. A record always states when, because a value with no instant cannot be compared with a later run."
+    },
+    "collector": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/code",
+      "description": "Required. A stable machine-readable identifier for the component that produced the record. The vocabulary is open for the same reason metric_id's is: collectors are interchangeable behind this contract, and naming them in a closed enum would make adding one a contract change."
+    },
+    "collector_version": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/single_line_label",
+      "description": "Required. The version of the method the collector used. Two records are comparable only when the metric and this version agree, so the version is recorded rather than assumed."
+    },
+    "assessment": {
+      "$ref": "urn:pxapi:schema:assessment:1.0.0#/$defs/assessment",
+      "description": "Required. Whether this measurement was performed and what came of it, or why it never happened. It is the member that decides whether a value may be carried at all."
+    },
+    "result": {
+      "type": "object",
+      "description": "Conditional. Present if and only if the assessment's result_state is KNOWN. It is a closed, discriminated shape rather than an open node: value_type names one of four types and exactly the matching typed member is carried, so the declared type and the carried value cannot disagree and no downstream reader has to guess how to interpret a value.",
+      "properties": {
+        "value_type": {
+          "type": "string",
+          "enum": ["BOOLEAN", "INTEGER", "TEXT", "URL"],
+          "description": "Required. Which of the four typed members carries the value. The set is closed: a value shape a later slice needs is a new version of this contract, deliberately, because widening it silently would change what every existing consumer must be able to read."
+        },
+        "boolean_value": {
+          "type": "boolean",
+          "description": "Conditional. Present if and only if value_type is BOOLEAN — a state that is either the case or not, such as whether the transport was HTTPS or whether an element was present."
+        },
+        "integer_value": {
+          "type": "integer",
+          "description": "Conditional. Present if and only if value_type is INTEGER — a whole-number measurement such as an HTTP status code."
+        },
+        "text_value": {
+          "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/single_line_text",
+          "description": "Conditional. Present if and only if value_type is TEXT — a short observed text such as a content type, a page title or a meta description, normalised to a single line. The shared bound applies: a longer value is not representable in this version of the contract, and widening it is a new version rather than a widened bound."
+        },
+        "url_value": {
+          "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/url",
+          "description": "Conditional. Present if and only if value_type is URL — an observed absolute http or https URL, such as a final URL after redirects or a declared canonical."
+        }
+      },
+      "required": ["value_type"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "value_type": { "const": "BOOLEAN" } }, "required": ["value_type"] },
+          "then": { "required": ["boolean_value"] },
+          "else": { "not": { "required": ["boolean_value"] } }
+        },
+        {
+          "if": { "properties": { "value_type": { "const": "INTEGER" } }, "required": ["value_type"] },
+          "then": { "required": ["integer_value"] },
+          "else": { "not": { "required": ["integer_value"] } }
+        },
+        {
+          "if": { "properties": { "value_type": { "const": "TEXT" } }, "required": ["value_type"] },
+          "then": { "required": ["text_value"] },
+          "else": { "not": { "required": ["text_value"] } }
+        },
+        {
+          "if": { "properties": { "value_type": { "const": "URL" } }, "required": ["value_type"] },
+          "then": { "required": ["url_value"] },
+          "else": { "not": { "required": ["url_value"] } }
+        }
+      ]
+    },
+    "raw_artifact_ref": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/id",
+      "description": "Optional. An opaque reference to a retained raw artifact, and nothing more: no digest, no location, no media type, no size, no retention rule and no redaction metadata. Those belong to the artifact contract a later slice owns, and are deliberately not anticipated here. Absent means no raw artifact is being pointed at, which says nothing about whether one was retained."
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "measurement_id",
+    "metric_id",
+    "source_url",
+    "observed_at",
+    "collector",
+    "collector_version",
+    "assessment"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "assessment": {
+            "properties": { "result_state": { "const": "KNOWN" } },
+            "required": ["result_state"]
+          }
+        },
+        "required": ["assessment"]
+      },
+      "then": { "required": ["result"] },
+      "else": { "not": { "required": ["result"] } }
+    }
+  ]
+}

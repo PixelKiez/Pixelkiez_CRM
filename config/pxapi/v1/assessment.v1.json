@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pxapi:schema:assessment:1.0.0",
+  "title": "PXAPI shared assessment semantics v1",
+  "description": "Reusable $defs stating whether something was assessed and what came of it. This file is not a contract: no document validates against it as a whole, and it is deliberately not registered as one — the block below is embedded in more than one carrier, and a registered contract must pin its own schema_version at its root, which would drag a nested version into every document that carries it. The one rule this file exists to make structural is that a document says either that an assessment was performed, or why it never happened, and never both. Everything a consumer needs in order not to read a technical failure as a finding about the analysed subject is decided here, once.",
+  "$defs": {
+    "collection_mode": {
+      "type": "string",
+      "enum": ["MEASURED", "OBSERVED"],
+      "description": "How a performed assessment obtained its result: by measuring a value, or by observing a state. The vocabulary is closed at these two values, and neither of them means 'not assessed' — whether an assessment happened at all is a separate member, so absence is never inferred from a mode. The two differ in method and not in trustworthiness; nothing downstream may rank one above the other."
+    },
+    "result_state": {
+      "type": "string",
+      "enum": ["KNOWN", "UNKNOWN", "CONFLICT", "NOT_APPLICABLE"],
+      "description": "What a performed assessment established. KNOWN is the only state that carries a value about the subject. UNKNOWN means the assessment ran and established nothing; CONFLICT means observations disagree and the disagreement is unresolved; NOT_APPLICABLE means the measurement does not apply to this subject at all. The last three are outcomes about the assessment and are never findings about the subject. The vocabulary is closed because each token carries its own rule about what a carrier may then state, and an open token would arrive with no such rule."
+    },
+    "not_assessed_reason": {
+      "type": "string",
+      "enum": [
+        "PROVIDER_FAILURE",
+        "RUNTIME_ERROR",
+        "PERMISSION_DENIED",
+        "TIMEOUT",
+        "UNSUPPORTED",
+        "NOT_REQUESTED"
+      ],
+      "description": "Why an assessment never happened. Every reason names the analysis process — a provider, our own runtime, a permission, a time budget, an unsupported subject, or nobody having asked — and none of them says anything about the subject. That is precisely why this vocabulary is closed while an identifier such as a metric or a collector stays open: an open token could carry a reason that does. A reason is not a severity and not a retry policy: whether a given reason is worth retrying is an orchestration decision no contract here makes."
+    },
+    "assessment": {
+      "type": "object",
+      "description": "Whether a subject was assessed, and what came of it. Exactly one of two shapes is legal: a performed assessment carries collection_mode and result_state, and an assessment that never happened carries not_assessed_reason. Carrying both is refused, and so is carrying neither, so a reader is never left to work out which half of a contradictory document to believe. Its members reference this file's own $defs by absolute URI rather than by a local pointer, because the block is resolved from whichever schema embeds it: a local '#/$defs/...' would be looked up in the embedding file and resolve nowhere.",
+      "properties": {
+        "collection_mode": {
+          "$ref": "urn:pxapi:schema:assessment:1.0.0#/$defs/collection_mode",
+          "description": "Conditional. Present if and only if the assessment was performed."
+        },
+        "result_state": {
+          "$ref": "urn:pxapi:schema:assessment:1.0.0#/$defs/result_state",
+          "description": "Conditional. Present if and only if the assessment was performed."
+        },
+        "not_assessed_reason": {
+          "$ref": "urn:pxapi:schema:assessment:1.0.0#/$defs/not_assessed_reason",
+          "description": "Conditional. Present if and only if the assessment never happened."
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": ["not_assessed_reason"]
+          },
+          "then": {
+            "not": {
+              "anyOf": [{ "required": ["collection_mode"] }, { "required": ["result_state"] }]
+            }
+          },
+          "else": {
+            "required": ["collection_mode", "result_state"]
+          }
+        }
+      ]
+    }
+  }
+}
