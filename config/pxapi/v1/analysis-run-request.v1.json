@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pxapi:schema:analysis-run-request:1.0.0",
+  "title": "PXAPI analysis run request v1",
+  "description": "The accepted request an Analysis Run was created from. It records what was asked for and under which operating mode the requester claims to be authorised — and nothing more. It is not an authorisation decision: owner verification, access control, URL reachability, egress and SSRF policy, robots handling and scanner execution policy are all enforced by the slices that own them, and a valid document here proves none of them. The request carries opaque references rather than personal data: no name, no e-mail address, no credential and no delivery destination.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Required. Always 1.0.0 for this contract. Each contract is versioned in its own right; this value is not a version of the contract set as a whole."
+    },
+    "run_id": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/id",
+      "description": "Required. The Analysis Run this request started. It is the link to that run's state document."
+    },
+    "request_id": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/id",
+      "description": "Required. The stable identity of this request artifact itself, distinct from the run it started."
+    },
+    "requested_at": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/timestamp",
+      "description": "Required. When the request was accepted, in UTC."
+    },
+    "target_url": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/url",
+      "description": "Required. The website the run was requested for, as a structural URL shape only. That a value validates here says nothing about whether it may be fetched."
+    },
+    "scan_mode": {
+      "type": "string",
+      "enum": ["PUBLIC_NON_INVASIVE", "OWNER_VERIFIED_CONTROLLED"],
+      "description": "Required. The operating mode the run was requested and authorised under. PUBLIC_NON_INVASIVE is what any visitor could observe; OWNER_VERIFIED_CONTROLLED is the mode that presupposes a verified site owner. The vocabulary is closed and case-sensitive, and the member is mandatory: a run whose authorised mode was never stated is not a valid request. Recording the mode is not performing the verification it names."
+    },
+    "requester_ref": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/id",
+      "description": "Optional. An opaque reference to the requesting identity, resolvable only by the system that issued it. Absent means the request is not attributed to a stored identity. It is a reference, never a name, an e-mail address or a credential."
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "request_id",
+    "requested_at",
+    "target_url",
+    "scan_mode"
+  ],
+  "additionalProperties": false
+}

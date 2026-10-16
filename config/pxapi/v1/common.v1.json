@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pxapi:schema:common:1.0.0",
+  "title": "PXAPI shared definitions v1",
+  "description": "Reusable $defs for the PXAPI v1 contracts. This file is not a contract: no document validates against it as a whole, and it carries no analysis meaning of its own. It holds only the lexical primitives that a registered contract actually references; a slice that needs a new primitive adds it here together with the contract that consumes it.",
+  "$defs": {
+    "single_line_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^[^\\u0000-\\u0020\\u007F-\\u009F\\u2028\\u2029]([^\\u0000-\\u001F\\u007F-\\u009F\\u2028\\u2029]*[^\\u0000-\\u0020\\u007F-\\u009F\\u2028\\u2029])?(?!\\n)$",
+      "description": "A single-line, bounded string with at least one non-blank character and no leading or trailing blank. The pattern rejects every C0 control (tab, CR and LF included), DEL, every C1 control (NEL included) and the Unicode LINE SEPARATOR and PARAGRAPH SEPARATOR — not merely CR and LF, because a renderer, a log line and a header all break on the others too."
+    },
+    "single_line_label": {
+      "$ref": "#/$defs/single_line_text",
+      "maxLength": 120,
+      "description": "A short single-line label or title. Same lexical rules as single_line_text, more tightly bounded."
+    },
+    "id": {
+      "$ref": "#/$defs/single_line_text",
+      "maxLength": 128,
+      "description": "An opaque, stable identifier. No identifier technology (UUID, ULID, prefix scheme) is prescribed; the producer chooses one and keeps it stable."
+    },
+    "code": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 64,
+      "pattern": "^[A-Z][A-Z0-9_]+(?!\\n)$",
+      "description": "A stable machine-readable code in upper snake case. Codes are open: a consumer must treat a code it does not know as a generic member of its category, never as an error."
+    },
+    "json_pointer": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^(?:/[^\\u0000-\\u001F\\u007F-\\u009F\\u2028\\u2029]*)?(?!\\n)$",
+      "description": "An RFC 6901 JSON pointer into a document; the empty string is the document root. The pattern fixes the single-line, bounded shape only — a pointer that resolves nowhere is a caller error, not a contract violation. It uses no nested quantifier, so a hostile value cannot make matching super-linear."
+    },
+    "schema_keyword": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z$][A-Za-z0-9_]*(?!\\n)$",
+      "description": "The name of a JSON Schema keyword (for example required, const, pattern, additionalProperties, $ref). It is structural vocabulary, so it is safe to hand to a client; a validator's free-text message is not."
+    },
+    "timestamp": {
+      "type": "string",
+      "maxLength": 30,
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:([0-5][0-9]|60)(\\.[0-9]{1,9})?Z(?!\\n)$",
+      "description": "An RFC 3339 instant in UTC, with the mandatory 'Z' designator — for example 2026-09-05T10:15:30Z or 2026-09-05T10:15:30.250Z. A numeric offset, a local time without a designator, a lowercase 't' or 'z', and a date without a time are all rejected by the pattern rather than by a 'format' annotation, which asserts nothing unless a checker is explicitly wired in. The leap-second value 60 is accepted because RFC 3339 permits it. Every instant in a PXAPI contract is UTC, so two documents from different producers order against each other without a timezone database."
+    },
+    "url": {
+      "type": "string",
+      "maxLength": 2048,
+      "pattern": "^https?://[^\\u0000-\\u0020\\u007F-\\u009F\\u2028\\u2029]{1,2040}(?!\\n)$",
+      "description": "An absolute http or https URL, as a structural shape only: a bounded single-line value with an explicit scheme and a non-empty remainder. It is deliberately not a reachability, canonicalisation or egress decision — loopback, private ranges, link-local metadata endpoints, redirects and robots policy belong to the slice that owns the scanner runtime, never to a contract."
+    }
+  }
+}

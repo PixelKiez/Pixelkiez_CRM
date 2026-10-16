@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pxapi:schema:problem:1.0.0",
+  "title": "PXAPI problem v1",
+  "description": "A transport-neutral, client-readable description of why an operation did not succeed. It carries no HTTP status, no type URI and no other transport binding; the adapter that owns a transport maps this document onto it. Every text member is single-line, bounded and produced from a fixed template, and every validation error is reported structurally as a JSON pointer plus the violated schema keyword, so that validator free text, exception messages, tracebacks, filesystem paths, tokens and secrets cannot appear here by construction.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Required. Always 1.0.0 for this contract. Each contract is versioned in its own right; this value is not a version of the contract set as a whole."
+    },
+    "code": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/code",
+      "description": "Required. A stable machine-readable problem code. The codes known at this contract version are listed in the registry manifest; the set is open, and a client must handle a code it does not know as a generic problem of the given title and detail."
+    },
+    "title": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/single_line_label",
+      "description": "Required. A short human-readable summary that is the same for every occurrence of the code. It is a fixed string per code, never per-occurrence text."
+    },
+    "detail": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/single_line_text",
+      "description": "Required. A bounded explanation of this occurrence, rendered from a fixed template and values the producer resolved from its own registry. Never validator free text, never an exception message, never a path."
+    },
+    "run_id": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/id",
+      "description": "Optional. The Analysis Run the problem is attributable to. Absent means the problem is not attributable to a run, for example because the request never became one."
+    },
+    "errors": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "properties": {
+          "pointer": {
+            "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/json_pointer",
+            "description": "Required. An RFC 6901 JSON pointer to the offending location in the submitted document; the empty string is the document root."
+          },
+          "keyword": {
+            "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/schema_keyword",
+            "description": "Required. The JSON Schema keyword that was violated, for example required, const, pattern or additionalProperties. Pointer and keyword together are enough for a client to locate and understand the violation without any prose."
+          }
+        },
+        "required": ["pointer", "keyword"],
+        "additionalProperties": false
+      },
+      "description": "Required. The individual violations for a validation problem, empty for a problem that is not about a document. The collection is finitely bounded: a producer reports at most maxItems entries and states the untruncated violation count in detail, so a pathological document cannot turn one problem into an unbounded response."
+    }
+  },
+  "required": ["schema_version", "code", "title", "detail", "errors"],
+  "additionalProperties": false
+}

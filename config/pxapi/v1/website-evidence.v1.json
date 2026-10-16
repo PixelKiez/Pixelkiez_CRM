@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pxapi:schema:website-evidence:1.0.0",
+  "title": "PXAPI website evidence v1",
+  "description": "One piece of evidence about an analysed website, derived from measurement records. It is where a statement about the site is finally allowed to be made, and therefore where the slice's central rule is enforced: polarity — whether the evidence speaks for or against the site — may be carried only when the assessment's result_state is KNOWN. A provider failure, a runtime error, a timeout, an unresolved conflict, an assessment that established nothing, and a measurement that does not apply are all refused a polarity outright, rather than being given a neutral one to carry, so a technical failure cannot be rendered as a negative finding about a customer's website. There is deliberately no NEUTRAL token: evidence that is KNOWN and carries no judgement omits the member. KNOWN evidence must also name at least one measurement record it was derived from, so no claim about the site exists without something measured behind it.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Required. Always 1.0.0 for this contract. Each contract is versioned in its own right; this value is not a version of the contract set as a whole."
+    },
+    "run_id": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/id",
+      "description": "Required. The Analysis Run this evidence belongs to. It is the only link to the run's state document, and it carries no claim about that run's outcome."
+    },
+    "evidence_id": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/id",
+      "description": "Required. This evidence's own stable identity, so that a later diagnosis can reference the evidence it rests on rather than restating it."
+    },
+    "source_url": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/url",
+      "description": "Required. The URL this evidence is about. It is a structural shape only: reachability, redirect policy, egress rules and robots handling belong to the slice that owns the collector runtime, never to this contract."
+    },
+    "observed_at": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/timestamp",
+      "description": "Required. When the observation this evidence rests on was made — or, for evidence that was not assessed, when the attempt was made."
+    },
+    "scenario": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/code",
+      "description": "Required. A stable machine-readable identifier for the context the observation was made in, such as a particular page fetch. The vocabulary is deliberately open: this contract fixes the token's lexical shape and not the set of scenarios, so a scenario a later slice introduces validates without a schema change."
+    },
+    "collector": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/code",
+      "description": "Required. A stable machine-readable identifier for the component that produced the evidence. The vocabulary is open for the same reason scenario's is."
+    },
+    "collector_version": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/single_line_label",
+      "description": "Required. The version of the method the collector used, so that two pieces of evidence are compared only when the method behind them is the same."
+    },
+    "assessment": {
+      "$ref": "urn:pxapi:schema:assessment:1.0.0#/$defs/assessment",
+      "description": "Required. Whether this evidence was established and what came of it, or why it never was. It is the member that decides whether a polarity may be carried at all."
+    },
+    "polarity": {
+      "type": "string",
+      "enum": ["POSITIVE", "NEGATIVE"],
+      "description": "Conditional. Permitted if and only if the assessment's result_state is KNOWN, and optional even then: evidence that is known but carries no judgement omits the member rather than declaring a neutral verdict nobody has defined. Refusing the member outside KNOWN is the structural guarantee that a provider failure, a timeout or an unresolved conflict cannot appear as a statement about the website."
+    },
+    "measurement_refs": {
+      "type": "array",
+      "items": { "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/id" },
+      "uniqueItems": true,
+      "description": "Required. The measurement_id values this evidence was derived from. At least one is required when the result_state is KNOWN, because derived evidence with nothing measured behind it is an assertion rather than evidence. It may be empty otherwise — an empty list means nothing was derived, never that the website lacks something."
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "evidence_id",
+    "source_url",
+    "observed_at",
+    "scenario",
+    "collector",
+    "collector_version",
+    "assessment",
+    "measurement_refs"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "assessment": {
+            "properties": { "result_state": { "const": "KNOWN" } },
+            "required": ["result_state"]
+          }
+        },
+        "required": ["assessment"]
+      },
+      "then": { "properties": { "measurement_refs": { "minItems": 1 } } },
+      "else": { "not": { "required": ["polarity"] } }
+    }
+  ]
+}

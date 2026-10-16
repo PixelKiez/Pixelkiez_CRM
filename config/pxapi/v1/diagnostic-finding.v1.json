@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pxapi:schema:diagnostic-finding:1.0.0",
+  "title": "PXAPI diagnostic finding v1",
+  "description": "One actionable finding about an analysed website, derived deterministically from website evidence by one named rule at one named version. It is the first contract in this registry allowed to speak about a site in ordinary language, so the boundary between what was measured and what is being said is drawn structurally. evidence_refs is the Fact Authority: every claim this document makes rests on the website evidence it names, and a finding that names nothing is not representable. finding_summary, business_impact, recommended_action and limitation are deterministic derived projections of that evidence — they never replace, override or extend the measured facts, and a consumer that needs the fact reads the evidence and the measurement records behind it. business_impact is a bounded potential or general business interpretation, never an observed business fact: no revenue, traffic, ranking or conversion effect is measured anywhere in this chain. The absence of a finding means only that this rule set emitted none; it never means the website is good, complete, compliant or fully assessed. There is deliberately no score, severity, priority, confidence or customer-projection member: each of those is a later, separately authorised decision, and a finding able to carry one would take that decision by accident.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Required. Always 1.0.0 for this contract. Each contract is versioned in its own right; this value is not a version of the contract set as a whole."
+    },
+    "run_id": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/id",
+      "description": "Required. The Analysis Run this finding belongs to. It is the only link to the run's state document, and it carries no claim about that run's outcome. Every piece of evidence a finding names belongs to the same run, because a conclusion assembled across two runs would describe a site that never existed at one instant."
+    },
+    "finding_id": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/id",
+      "description": "Required. This finding's own stable identity, so that a later diagnosis can reference it rather than restating it."
+    },
+    "rule_id": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/code",
+      "description": "Required. A stable machine-readable identifier for the rule that emitted this finding. The vocabulary is deliberately open: this contract fixes the token's lexical shape and never the set of rules, so a rule a later slice introduces validates here without a schema change. A consumer treats a rule_id it does not know as an unknown rule, never as an error."
+    },
+    "rule_version": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/single_line_label",
+      "description": "Required. The version of the rule that emitted this finding. Two findings are comparable only when the rule and this version agree, so the version travels with the finding rather than being assumed. A rule whose trigger condition or whose product texts change is a new version of that rule."
+    },
+    "finding_class": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/code",
+      "description": "Required. A stable machine-readable identifier for what kind of finding this is, so a consumer can group and route findings without parsing the texts. The vocabulary is open for the same reason rule_id's is. It is a classification and never a severity: nothing here ranks one class above another."
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/id"
+      },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Required. The website evidence identities this finding rests on, as evidence_id values. At least one is required, because a finding with nothing behind it is an assertion rather than a finding, and each must be distinct, because the same evidence counted twice would overstate what the finding rests on. The reference is deliberately to evidence and never to a measurement record: website evidence is where a statement about the site is allowed to be made at all, and a finding that pointed straight at a raw measurement would bypass that gate. The measurement records stay reachable through the evidence's own measurement_refs."
+    },
+    "finding_summary": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/single_line_text",
+      "description": "Required. What the referenced evidence shows, in one bounded line. It is a fixed projection of the rule that emitted it, not a rendering of a measured value: two findings from the same rule at the same version carry the same summary whatever number or text the underlying measurement held, so a value can never leak into prose that no contract validates."
+    },
+    "business_impact": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/single_line_text",
+      "description": "Required. A bounded potential or general business interpretation of the finding — what this could mean, stated so that it cannot be read as something that was measured. No revenue, traffic, ranking, conversion or customer effect is observed anywhere in this chain, and none may be asserted here. Like the summary, it is fixed per rule version."
+    },
+    "recommended_action": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/single_line_text",
+      "description": "Required. What the site owner can do about the finding, in one bounded line. It is advice derived from the rule, never an instruction the analysis has verified the effect of, and it is fixed per rule version."
+    },
+    "limitation": {
+      "$ref": "urn:pxapi:schema:common:1.0.0#/$defs/single_line_text",
+      "description": "Required. What this finding deliberately does not establish. It is mandatory rather than optional because a finding read without its bound is the most likely way this contract gets misused: one automated observation of one page is not a statement about a site's availability, security posture or search quality, and the document says so itself rather than relying on a reader to know. It is fixed per rule version."
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "finding_id",
+    "rule_id",
+    "rule_version",
+    "finding_class",
+    "evidence_refs",
+    "finding_summary",
+    "business_impact",
+    "recommended_action",
+    "limitation"
+  ],
+  "additionalProperties": false
+}
