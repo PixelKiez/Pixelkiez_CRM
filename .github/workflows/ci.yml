@@ -127,7 +127,7 @@ jobs:
           const [reportPath, logPath] = process.argv.slice(2);
           const problems = [];
           const check = (ok, message) => { if (!ok) problems.push(message); };
-          const EXPECTED_FILES = ['agent-api.test.ts', 'agent-auth.test.ts', 'agent-keine-anrufe.test.ts', 'harness-guards.test.ts', 'lead-sync.test.ts', 'pxapi-analysis-route.test.ts', 'pxapi-analysis.test.ts'];
+          const EXPECTED_FILES = ['agent-api.test.ts', 'agent-auth.test.ts', 'agent-keine-anrufe.test.ts', 'harness-guards.test.ts', 'lead-sync.test.ts', 'pxapi-analysis-route.test.ts', 'pxapi-analysis.test.ts', 'pxapi-client.test.ts'];
           const MIN_VITEST_TESTS = 229;
           const MIN_DB_TESTS = 210;
           let v = {};
