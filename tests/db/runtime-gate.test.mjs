@@ -17,7 +17,7 @@ import { pathToFileURL } from 'node:url';
 import { EXIT_CODES } from '../../lib/db/errors.mjs';
 import { MIN_NODE_API, SUPPORTED_NODE, assertSupportedRuntime, runtimeProblem } from '../../lib/db/runtime.mjs';
 import { runAppScript } from './app-modules.mjs';
-import { ROOT, tempDir } from './helpers.mjs';
+import { HEAD, ROOT, escapeRegExp, realActions, tempDir } from './helpers.mjs';
 
 const SCRIPTS = ['scripts/db-migrate.mjs', 'scripts/db-verify-copy.mjs'];
 const MESSAGE = /^PXK-DB \[UNSUPPORTED_RUNTIME\] node: Node v[\w.?+-]+ \(Node-API [\w.?+-]+\) wird nicht unterstützt — erforderlich: Node >=22\.14\.0 <23 mit Node-API >= 10/;
@@ -121,7 +121,7 @@ test('echte Node-Binaries (PXK_TEST_NODE_BINARIES): unterstützte migrieren, äl
     for (const result of [migrate, harness]) assert.equal(result.signal, null, `${label}: kein Absturz (${result.signal})`);
     if (supported) {
       assert.equal(migrate.status, 0, `${label}: ${migrate.stderr}`);
-      assert.match(migrate.stdout, /^PXK-DB ok head=1 applied 0001_baseline$/m, label);
+      assert.match(migrate.stdout, new RegExp(`^PXK-DB ok head=${HEAD} ${escapeRegExp(realActions().join(', '))}$`, 'm'), label);
       assert.equal(harness.status, 2, `${label}: Prüfstand läuft bis zur Argumentprüfung`);
     } else {
       for (const result of [migrate, harness]) {

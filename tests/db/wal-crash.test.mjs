@@ -18,7 +18,7 @@ import { test } from 'node:test';
 import Database from 'better-sqlite3';
 import { openDatabase, openProblem } from '../../lib/db/open.mjs';
 import { source } from './ac3-helpers.mjs';
-import { ROOT, tempDir } from './helpers.mjs';
+import { ROOT, escapeRegExp, realActions, tempDir } from './helpers.mjs';
 import { assertAccepted, assertRefused, cli, commitsOf, FRAME, frameAt, frameCount, killedWriter, PAGE, prodPair, rebuiltIndex, restart, rows, sqliteValue } from './wal-helpers.mjs';
 
 const PROD = prodPair();
@@ -267,7 +267,7 @@ test('H-2: produktionsförmige CRM-Daten nur im -wal — Migration in Produktion
   const backups = join(tempDir(), 'sicherungen');
   const result = cli([], { SQLITE_PATH: path, RAILWAY_ENVIRONMENT_NAME: 'production', PXK_DB_BACKUP_DIR: backups });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /baselined 0001_baseline \(S5\) seeds=0\/0/);
+  assert.match(result.stdout, new RegExp(`${escapeRegExp(realActions('baselined 0001_baseline (S5)').join(', '))} seeds=0/0`));
   assert.equal(count(), before);
   assert.equal(readdirSync(backups).filter(f => f.endsWith('.db')).length, 1);
   assert.ok(readdirSync(dir).includes('quelle.db'));

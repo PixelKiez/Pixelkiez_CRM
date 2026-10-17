@@ -54,10 +54,12 @@ export function source({ variant = 'S5', missingTemplate = null, walRows = 0 } =
  * Saubere Git-Kopie des Kandidaten, aus der der Prüfstand läuft (mit `git: false`
  * ohne Repository). `stub` ersetzt scripts/db-migrate.mjs durch ein eigenes
  * Skript; der echte Schritt liegt dann als scripts/db-migrate-echt.mjs daneben.
+ * `migrations` legt zusätzliche Dateien nach db/migrations (Teil des Kandidaten).
  */
-export function isolatedProject({ git: withGit = true, stub = null } = {}) {
+export function isolatedProject({ git: withGit = true, stub = null, migrations = {} } = {}) {
   const dir = tempDir();
   for (const part of ['scripts', 'lib', 'db']) cpSync(join(ROOT, part), join(dir, part), { recursive: true });
+  for (const [name, text] of Object.entries(migrations)) writeFileSync(join(dir, 'db', 'migrations', name), text);
   symlinkSync(join(ROOT, 'node_modules'), join(dir, 'node_modules'));
   writeFileSync(join(dir, '.gitignore'), '/node_modules\n');
   if (stub) {
@@ -142,7 +144,7 @@ export const ALLOWED = [
   /^PXK-AC3 after class=[A-Z_]+( S[1-5])? user_version=\d+ ledger_check=[A-Za-z_]+ integrity=(ok|FAILED)$/,
   /^PXK-AC3 ledger rows=\d+ (-|(\d+:\d{4}_[a-z0-9_]+:(applied|baselined):(S[1-5]|-) ?)+) ?expected=(MATCH|MISMATCH)$/,
   /^PXK-AC3 schema after_vs_canonical=(MATCH|MISMATCH) before_vs_after=(MATCH|CHANGED)$/,
-  /^PXK-AC3 table=([A-Za-z0-9_]+|#\d+) rows_before=(-|\d+) rows_after=(-|\d+) content=(MATCH|MISMATCH)$/,
+  /^PXK-AC3 table=([A-Za-z0-9_]+|#\d+) rows_before=(-|\d+) rows_after=(-|\d+) content=(MATCH|MISMATCH|NEW_EMPTY)$/,
   /^PXK-AC3 changed_tables=\d+$/,
   /^PXK-AC3 backup_vs_before=(MATCH|MISMATCH|MISSING|none-required)$/,
   /^PXK-AC3 run2 exit=\d+ error=[-A-Z_0-9]+ actions=[a-z0-9_ ,()S-]+ seeds=(-|\d+\/\d+) backups_created=-?\d+ noop=(MATCH|MISMATCH)$/,

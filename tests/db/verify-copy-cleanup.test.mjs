@@ -145,6 +145,20 @@ test('M-4 Schema-FAIL (Kandidat legt einen fremden Index an): Klartext entfernt'
   assertPrivate(result);
 });
 
+test('M-4 Daten-FAIL (Kandidat legt außerhalb der Migrationen eine leere Tabelle an): kein NEW_EMPTY, MISMATCH, Klartext entfernt', { skip }, () => {
+  const { dir, path } = source();
+  const before = snapshot(dir);
+  const project = stubProject(AFTER_REAL("  const db = new Database(process.env.SQLITE_PATH); db.exec('CREATE TABLE fremd_leer (x)'); db.close();"));
+  const work = join(tempDir(), 'arbeit');
+  const result = harness([`--source=${path}`, `--workdir=${work}`], {}, project);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.equal(result.value('table=fremd_leer '), 'PXK-AC3 table=fremd_leer rows_before=- rows_after=0 content=MISMATCH');
+  assert.equal(result.value('changed_tables='), 'PXK-AC3 changed_tables=1');
+  assert.equal(result.value('failures='), 'PXK-AC3 failures=after_ledger_state,ledger_rows,schema_canonical,business_data,run2_noop');
+  assertCleaned(result, work, dir, before);
+  assertPrivate(result);
+});
+
 test('M-4 interne Ausnahme (unlesbare Sicherung im Sicherungsziel): Klartext entfernt, nur Fehlertyp auf stderr', { skip }, () => {
   const { dir, path } = source();
   const before = snapshot(dir);

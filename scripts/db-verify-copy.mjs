@@ -21,6 +21,9 @@
  *     Migrations-Metadaten (schema_migrations, user_version) werden getrennt
  *     ausgewiesen; das Schema muss dem kanonischen Schema nach allen Migrationen
  *     gleichen (D8); eine Sicherung aus Lauf 1 muss den Stand vorher enthalten.
+ *     Eine Tabelle, die erst eine in Lauf 1 ausstehende Migration anlegt und
+ *     die danach leer ist, ist keine Datenänderung (content=NEW_EMPTY); hat sie
+ *     Zeilen oder stammt sie nicht aus diesen Migrationen, bleibt es MISMATCH.
  *
  * Datenschutz: Prüfsummen sind HMAC-SHA256 mit einem Schlüssel, der nur im
  * Speicher dieses Prozesses existiert, über eine verlustfreie, nach ihrem
@@ -166,14 +169,19 @@ export function measure(path, key, set, refs) {
   }
 }
 
-/** Tabellen mit abweichender Zeilenzahl oder Prüfsumme (ohne ausgenommene). */
-export function compareContent(before, after, exclude = [LEDGER_TABLE]) {
+/**
+ * Tabellen mit abweichender Zeilenzahl oder Prüfsumme (ohne ausgenommene).
+ * `created`: Tabellen, die in Lauf 1 ausstehende Migrationen anlegen — nur sie
+ * können NEW_EMPTY sein, und nur, wenn sie vorher fehlten und nachher leer sind.
+ */
+export function compareContent(before, after, exclude = [LEDGER_TABLE], created = []) {
   const names = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(n => !exclude.includes(n)).sort();
   return names.map(name => ({
     name,
     rowsBefore: before[name]?.rows ?? null,
     rowsAfter: after[name]?.rows ?? null,
     match: Boolean(before[name] && after[name] && before[name].rows === after[name].rows && before[name].mac === after[name].mac),
+    newEmpty: !before[name] && after[name]?.rows === 0 && created.includes(name),
   }));
 }
 
@@ -399,9 +407,12 @@ async function compare({ source: given, workdir }, run) {
   const canonical = refs.replay(set.migrations.length);
   out(`schema after_vs_canonical=${expect(sameFingerprint(after.fp, canonical), 'schema_canonical')} before_vs_after=${sameFingerprint(before.fp, after.fp) ? 'MATCH' : 'CHANGED'}`);
 
-  const tables = compareContent(before.content, after.content);
-  tables.forEach((t, i) => out(`table=${shownName(t.name, i)} rows_before=${t.rowsBefore ?? '-'} rows_after=${t.rowsAfter ?? '-'} content=${t.match ? 'MATCH' : 'MISMATCH'}`));
-  const changed = tables.filter(t => !t.match).length;
+  // Von den in Lauf 1 ausstehenden Migrationen angelegt: im kanonischen Kopf, aber nicht im Stand davor (Altstand = Baseline, migriert = geprüftes Ledger).
+  const headBefore = before.kind === 'LEGACY_EXACT' ? 1 : before.kind === 'MIGRATED' && before.ledgerCheck === 'ok' ? before.ledger.length : null;
+  const created = headBefore === null ? [] : Object.keys(canonical.structural.tables).filter(n => !refs.replay(headBefore).structural.tables[n]);
+  const tables = compareContent(before.content, after.content, [LEDGER_TABLE], created);
+  tables.forEach((t, i) => out(`table=${shownName(t.name, i)} rows_before=${t.rowsBefore ?? '-'} rows_after=${t.rowsAfter ?? '-'} content=${t.match ? 'MATCH' : t.newEmpty ? 'NEW_EMPTY' : 'MISMATCH'}`));
+  const changed = tables.filter(t => !t.match && !t.newEmpty).length;
   out(`changed_tables=${changed}`);
   expect(changed === 0, 'business_data');
 
